@@ -20,11 +20,11 @@ final class SoundBank {
         Self.prepareSession()
         volume = Float(min(max(settings.volume, 0), 1))
 
+        let files = await CDNContent.data(Set(clips.values.joined()), relativeTo: base)
         for (key, refs) in clips {
             var list: [AVAudioPlayer] = []
             for ref in refs {
-                guard let data = await CDNContent.data(ref, relativeTo: base),
-                      let player = try? AVAudioPlayer(data: data) else { continue }
+                guard let data = files[ref], let player = try? AVAudioPlayer(data: data) else { continue }
                 player.prepareToPlay()
                 list.append(player)
             }

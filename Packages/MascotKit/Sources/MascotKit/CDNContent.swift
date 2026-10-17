@@ -2,11 +2,11 @@
 //  CDNContent.swift
 //  MascotKit
 //
-//  Общая загрузка контента приколов с CDN:
+//  Загрузка контента с CDN:
 //    1. CDN (свежий, с таймаутом) → сохраняется в кэш;
-//    2. кэш с прошлого удачного запуска — если сети нет;
-//    3. встроенный JSON из бандла — если нет ни того, ни другого.
-//  Картинки кэшируются на диск навсегда по адресу.
+//    2. кэш с прошлого удачного запуска — если сети нет.
+//  Ничего не зашито в приложение: нет ни CDN, ни кэша — прикол просто не показывается.
+//  Картинки и звуки кэшируются на диск навсегда по адресу.
 //
 
 import SwiftUI
@@ -35,7 +35,7 @@ enum CDNContent {
     }
 
     /// Загружает и декодирует конфиг. Возвращает его и адрес, от которого считать относительные пути картинок.
-    static func load<T: Decodable>(_ type: T.Type, file: String, bundled: String) async -> (T, URL?)? {
+    static func load<T: Decodable>(_ type: T.Type, file: String) async -> (T, URL?)? {
         let cached = cacheDirectory.appendingPathComponent(file)
         let source = cacheDirectory.appendingPathComponent(file + ".source")
 
@@ -48,11 +48,6 @@ enum CDNContent {
         if let data = try? Data(contentsOf: cached), let value = decode(type, data, file) {
             let base = (try? String(contentsOf: source, encoding: .utf8)).flatMap(URL.init(string:))
             return (value, base)
-        }
-        if let url = Bundle.main.url(forResource: bundled, withExtension: "json"),
-           let data = try? Data(contentsOf: url), let value = decode(type, data, file) {
-            // Относительные пути во встроенном конфиге — к файлам в бандле приложения.
-            return (value, url.deletingLastPathComponent())
         }
         return nil
     }
@@ -73,6 +68,20 @@ enum CDNContent {
         guard let data = await fetch(url) else { return nil }
         try? data.write(to: file)
         return data
+    }
+
+    /// Несколько файлов сразу — параллельно, а не по одному: на мобильной сети это в разы быстрее.
+    static func data(_ refs: Set<String>, relativeTo base: URL?) async -> [String: Data] {
+        await withTaskGroup(of: (String, Data?).self) { group in
+            for ref in refs {
+                group.addTask { (ref, await CDNContent.data(ref, relativeTo: base)) }
+            }
+            var result: [String: Data] = [:]
+            for await (ref, data) in group {
+                if let data { result[ref] = data }
+            }
+            return result
+        }
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data, _ file: String) -> T? {

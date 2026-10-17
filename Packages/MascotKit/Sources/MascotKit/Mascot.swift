@@ -109,9 +109,9 @@ extension View {
     /// Слой, в котором живёт маскот. Вешается один раз на корневую вьюху экрана.
     /// - Parameters:
     ///   - configFile: имя конфига в папке `Mascot.contentURL`.
-    ///   - bundledFallback: имя JSON в бандле приложения — если нет ни сети, ни кэша.
-    public func mascot(configFile: String = "pet.json", bundledFallback: String = "pet_default") -> some View {
-        modifier(MascotRootModifier(configFile: configFile, bundledFallback: bundledFallback))
+    ///   Нет ни CDN, ни кэша — маскот просто не появляется: в приложение ничего не зашито.
+    public func mascot(configFile: String = "pet.json") -> some View {
+        modifier(MascotRootModifier(configFile: configFile))
     }
 
     /// Вьюха, по верхнему краю которой маскот может ходить и на которую прыгает.
@@ -136,7 +136,6 @@ extension View {
 
 private struct MascotRootModifier: ViewModifier {
     let configFile: String
-    let bundledFallback: String
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -153,7 +152,7 @@ private struct MascotRootModifier: ViewModifier {
             }
             .onAppear { isOnScreen = true }
             .onDisappear { isOnScreen = false }
-            .task { if !reduceMotion { await PetWorld.shared.start(configFile: configFile, bundledFallback: bundledFallback) } }
+            .task { if !reduceMotion { await PetWorld.shared.start(configFile: configFile) } }
             .onChange(of: scenePhase) { phase in
                 if phase == .active { PetWorld.shared.appearanceCheck() }
             }

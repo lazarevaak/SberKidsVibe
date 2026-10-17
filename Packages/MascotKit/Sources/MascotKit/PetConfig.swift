@@ -36,6 +36,14 @@ struct PetConfig: Decodable {
     /// Общие настройки звука: выключатель и громкость.
     var sounds = PetSounds()
     var skins: [PetSkin] = []
+    /// Персонажи из деталей (character.json на CDN). Нет подходящего — маскот не появляется.
+    var characters: [PetCharacterRef] = []
+    /// Размер маскота относительно нарисованного (1 — как в character.json). У персонажа может быть свой.
+    var scale = 0.75
+    /// Внешний вид реплик: шрифт, ширина, строки, цвета, сколько висит.
+    var bubble = PetBubbleStyle()
+    /// Принудительный персонаж по id — для демо.
+    var forceCharacter: String?
     /// Принудительный костюм по id — для демо.
     var forceSkin: String?
 
@@ -44,6 +52,7 @@ struct PetConfig: Decodable {
     private enum CodingKeys: String, CodingKey {
         case enabled, firstOpenOfDay, randomChance, onShake, onEvents, onCharging, triggers
         case stayMinutes, behaviors, walkSpeed, nightSleepBoost, phrases, sounds, reactions, skins, forceSkin
+        case characters, forceCharacter, scale, bubble
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +70,10 @@ struct PetConfig: Decodable {
         forceSkin = try c.decodeIfPresent(String.self, forKey: .forceSkin)
         sounds = try c.value(.sounds, default: sounds)
         skins = try c.value(.skins, default: [])
+        characters = try c.value(.characters, default: [])
+        scale = try c.value(.scale, default: scale)
+        bubble = try c.value(.bubble, default: bubble)
+        forceCharacter = try c.decodeIfPresent(String.self, forKey: .forceCharacter)
         // Ключи, которых нет в JSON, берутся из значений по умолчанию.
         behaviors.merge(try c.value(.behaviors, default: [:])) { $1 }
 
@@ -82,6 +95,16 @@ struct PetConfig: Decodable {
         reactions.compactMapValues { $0.sound?.isEmpty == false ? $0.sound : nil }
     }
 
+    /// Персонаж на сегодня: принудительный, иначе сезонный важнее круглогодичного, среди равных — по весам.
+    func character(on date: Date = .now) -> PetCharacterRef? {
+        if let forceCharacter, let pick = characters.first(where: { $0.id == forceCharacter }) { return pick }
+        let active = characters.filter { $0.weight > 0 && Season.isActive(from: $0.from, to: $0.to, on: date) }
+        guard let top = active.map(\.priority).max() else { return nil }
+        let candidates = active.filter { $0.priority == top }
+        var roll = Double.random(in: 0..<candidates.reduce(0) { $0 + $1.weight })
+        return candidates.first { roll -= $0.weight; return roll < 0 } ?? candidates.last
+    }
+
     func skin(on date: Date = .now) -> PetSkin? {
         if let forceSkin, let skin = skins.first(where: { $0.id == forceSkin }) { return skin }
         return skins.filter { Season.isActive(from: $0.from, to: $0.to, on: date) }.max { $0.priority < $1.priority }
@@ -91,23 +114,11 @@ struct PetConfig: Decodable {
         "walk": 4, "idle": 2, "sit": 1.5, "wave": 1, "hop": 2, "sleep": 0.4, "dance": 0.6,
     ]
 
-    /// Встроенные реакции. Звуки по умолчанию не заданы — файлы приходят из конфига.
+    /// Технические значения по умолчанию — паузы, чтобы повторяющиеся события не «строчили».
+    /// Реплик и звуков в коде нет: весь контент приходит из конфига.
     static let defaultReactions: [String: PetReaction] = [
-        "hello": PetReaction(say: ["Привет!", "Я тут живу", "О, ты пришёл!"]),
-        "night": PetReaction(say: ["Ой… уже ночь?", "Я спать хотел…"]),
-        "comeBack": PetReaction(say: ["Я вернулся!", "Скучал?"]),
-        "tap": PetReaction(say: ["Хи-хи!", "Щекотно!", "Что?", "Ну чего ты?"]),
-        "grab": PetReaction(say: ["Ааа!", "Поставь!", "Я лечу?!"]),
-        "thrown": PetReaction(say: ["Эээй!", "Ну заче-е-ем…"]),
-        "hardLanding": PetReaction(say: ["Ой-ой…", "Всё кружится…"]),
-        "shake": PetReaction(say: ["Землетрясение!", "Аааа!"]),
-        "tilt": PetReaction(say: ["Скользко!", "Держусь!"], cooldown: 4),
-        "upsideDown": PetReaction(say: ["Эй, переверни!", "Мир вверх ногами!"], cooldown: 6),
-        "charging": PetReaction(say: ["Ммм, энергия!", "Заряжаемся!"], animation: "celebrate"),
-        "topUp": PetReaction(say: ["Ура, денежки!", "Пополнение!"], animation: "celebrate"),
-        "taskDone": PetReaction(say: ["Дело сделано!", "Ты молодец!"], animation: "celebrate"),
-        "achievement": PetReaction(say: ["Вот это да!", "Новое достижение!"], animation: "celebrate"),
-        "bye": PetReaction(say: ["Пока!", "Я домой"]),
+        "tilt": PetReaction(cooldown: 4),
+        "upsideDown": PetReaction(cooldown: 6),
         "snore": PetReaction(cooldown: 2.8),
         "dizzy": PetReaction(cooldown: 1.1),
     ]
@@ -119,8 +130,6 @@ struct PetSkin: Decodable {
     var to: String?
     /// Картинка шапки (URL или путь относительно конфига). "none" — без шапки.
     var hat: String?
-    var fur: String?
-    var face: String?
     /// Сезонный костюм важнее костюма на весь год.
     var priority: Int { from == nil ? 0 : 1 }
 }
@@ -223,5 +232,68 @@ struct PetLine: Decodable {
         maxPerVisit = try c.decodeIfPresent(Int.self, forKey: .maxPerVisit)
         first = try c.decodeIfPresent(Bool.self, forKey: .first)
         duration = try c.decodeIfPresent(Double.self, forKey: .duration)
+    }
+}
+
+/// Ссылка на персонажа из деталей.
+struct PetCharacterRef: Decodable {
+    var id: String
+    /// Путь к character.json — относительно конфига или полный URL.
+    var path: String
+    var from: String?
+    var to: String?
+    var weight: Double
+    /// Свой размер персонажа — важнее общего scale.
+    var scale: Double?
+
+    var priority: Int { from == nil ? 0 : 1 }
+
+    private enum CodingKeys: String, CodingKey { case id, path, from, to, weight, scale }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        path = try c.decode(String.self, forKey: .path)
+        from = try c.decodeIfPresent(String.self, forKey: .from)
+        to = try c.decodeIfPresent(String.self, forKey: .to)
+        weight = try c.decodeIfPresent(Double.self, forKey: .weight) ?? 1
+        scale = try c.decodeIfPresent(Double.self, forKey: .scale)
+    }
+}
+
+/// Окно реплики. Все поля необязательны; значения ограничены разумными пределами,
+/// чтобы опечатка в конфиге не закрыла пол-экрана.
+struct PetBubbleStyle: Decodable {
+    var fontSize: Double = 12
+    var maxWidth: Double = 200
+    var maxLines = 3
+    var textColor = "#1C1C1E"
+    var background = "#FFFFFF"
+    /// Непрозрачность фона: 1 — сплошной, меньше — сквозь него видно интерфейс.
+    var opacity: Double = 0.5
+    /// Матовое размытие под репликой (как у системных панелей iOS). Оно скрывает то, что под репликой,
+    /// и даёт сероватый оттенок, поэтому по умолчанию выключено — фон просто полупрозрачный.
+    var blur = false
+    var cornerRadius: Double = 12
+    /// Сколько секунд висит обычная реплика; гарантированная по умолчанию — почти вдвое дольше.
+    var duration: Double = 2.4
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case fontSize, maxWidth, maxLines, textColor, background, opacity, blur, cornerRadius, duration
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fontSize = min(max(try c.value(.fontSize, default: fontSize), 9), 24)
+        maxWidth = min(max(try c.value(.maxWidth, default: maxWidth), 100), 320)
+        maxLines = min(max(try c.value(.maxLines, default: maxLines), 1), 6)
+        textColor = try c.value(.textColor, default: textColor)
+        background = try c.value(.background, default: background)
+        opacity = min(max(try c.value(.opacity, default: opacity), 0.2), 1)
+        blur = try c.value(.blur, default: blur)
+        cornerRadius = min(max(try c.value(.cornerRadius, default: cornerRadius), 0), 24)
+        duration = min(max(try c.value(.duration, default: duration), 0.8), 15)
     }
 }

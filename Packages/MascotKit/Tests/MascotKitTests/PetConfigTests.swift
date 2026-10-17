@@ -35,9 +35,9 @@ final class PetConfigTests: XCTestCase {
         { "reactions": { "tilt": { "sound": ["slide.wav"] } } }
         """)
         let tilt = try XCTUnwrap(config.reactions["tilt"])
-        // Звук добавился, встроенные реплики и пауза остались.
+        // Звук добавился, техническая пауза из кода осталась; реплик в коде нет.
         XCTAssertEqual(tilt.sound, ["slide.wav"])
-        XCTAssertEqual(tilt.say?.first?.text, "Скользко!")
+        XCTAssertNil(tilt.say)
         XCTAssertEqual(tilt.cooldown, 4)
     }
 
@@ -74,9 +74,35 @@ final class PetConfigTests: XCTestCase {
     }
 
     @MainActor
-    func testBrokenOptionalFieldsFallBackToDefaults() throws {
+    func testBubbleStyleIsConfigurableAndClamped() throws {
+        let custom = try decode("""
+        { "bubble": { "fontSize": 16, "maxWidth": 260, "maxLines": 4, "background": "#FFF4D6" } }
+        """)
+        XCTAssertEqual(custom.bubble.fontSize, 16)
+        XCTAssertEqual(custom.bubble.maxWidth, 260)
+        XCTAssertEqual(custom.bubble.maxLines, 4)
+        XCTAssertEqual(custom.bubble.background, "#FFF4D6")
+        XCTAssertEqual(custom.bubble.duration, 2.4, "не указано — по умолчанию")
+        XCTAssertEqual(custom.bubble.opacity, 0.5)
+        XCTAssertFalse(custom.bubble.blur)
+
+        // Опечатка в конфиге не должна закрыть пол-экрана.
+        let wild = try decode(#"{ "bubble": { "fontSize": 80, "maxWidth": 5000, "maxLines": 0 } }"#)
+        XCTAssertEqual(wild.bubble.fontSize, 24)
+        XCTAssertEqual(wild.bubble.maxWidth, 320)
+        XCTAssertEqual(wild.bubble.maxLines, 1)
+
+        let solid = try decode(#"{ "bubble": { "opacity": 0, "blur": false } }"#)
+        XCTAssertEqual(solid.bubble.opacity, 0.2, "совсем прозрачный фон — нечитаемо, ограничиваем")
+        XCTAssertFalse(solid.bubble.blur)
+    }
+
+    @MainActor
+    func testNoContentIsBuiltIn() throws {
         let config = try decode("{}")
         XCTAssertTrue(config.enabled)
-        XCTAssertEqual(config.reactions["hello"]?.say?.isEmpty, false)
+        // Весь контент — только из конфига: в коде нет ни реплик, ни звуков, ни персонажей.
+        XCTAssertTrue(config.reactions.values.allSatisfy { $0.say == nil && $0.sound == nil })
+        XCTAssertTrue(config.characters.isEmpty)
     }
 }

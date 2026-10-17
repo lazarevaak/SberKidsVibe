@@ -13,7 +13,7 @@ import VinesKit
 struct GreenAlfaKidsApp: App {
     init() {
         // Папка с контентом приколов. Подменяется аргументом -CDNBaseURL для демо.
-        let content = URL(string: "https://raw.githubusercontent.com/lazarevaak/SberKidsVibe/main/cdn/")
+        let content = URL(string: "https://karablik27.github.io/sberkids-cdn/")
         Mascot.contentURL = content
         Vines.contentURL = content
     }

@@ -22,10 +22,12 @@ public enum MascotEvent: String, Sendable {
 enum PetMode: Equatable {
     case hidden, descending, airborne, grabbed, leaving
     case walking, idle, sitting, waving, sleeping, dizzy, dancing, celebrating
+    /// Своя анимация из character.json.
+    case performing
 
     var isGrounded: Bool {
         switch self {
-        case .walking, .idle, .sitting, .waving, .sleeping, .dizzy, .dancing, .celebrating: true
+        case .walking, .idle, .sitting, .waving, .sleeping, .dizzy, .dancing, .celebrating, .performing: true
         default: false
         }
     }
@@ -49,6 +51,10 @@ struct PetSnapshot {
     var bubble: String?
     var blink: Bool
     var time: TimeInterval
+    /// Своя анимация, которую он сейчас исполняет.
+    var animation: String?
+    /// Сколько секунд длится текущее состояние.
+    var modeTime: TimeInterval
 }
 
 /// Единственное наблюдаемое состояние — чтобы TimelineView останавливался, пока маскота нет.
@@ -66,6 +72,8 @@ final class PetWorld {
     private(set) var config = PetConfig()
     private(set) var skin: PetSkin?
     private(set) var hat: UIImage?
+    /// Персонаж из деталей с CDN. Пока его нет, маскот не появляется.
+    private(set) var character: LoadedCharacter?
 
     // Геометрия экрана (глобальные координаты)
     var overlayFrame: CGRect = .zero
@@ -102,6 +110,11 @@ final class PetWorld {
     private var dizzyOnLanding = false
     /// Анимация из реакции, которую надо сыграть, как только он встанет на карточку.
     private var pendingAnimation: String?
+    /// Своя анимация, которая играет сейчас.
+    private var performing: String?
+    /// Глубина вложенных реакций: анимация, вызванная из реакции, сама анимаций не запускает —
+    /// так не бывает петель вроде «прыгнул → анимация прыжка → прыгнул…».
+    private var reactionDepth = 0
     private var leave: (from: CGPoint, to: CGPoint, start: TimeInterval)?
 
     // Датчики
@@ -109,10 +122,15 @@ final class PetWorld {
     private var gravity = CGVector(dx: 0, dy: -1)
     private var lastShake: TimeInterval = 0
     private var didStart = false
+    /// Конфиг, персонаж и экран готовы. До этого маскот не появляется ни по какому поводу —
+    /// иначе он успел бы прийти со встроенными значениями, а не с теми, что пришли с CDN.
+    private var isReady = false
     private let sounds = SoundBank()
 
     private let g: CGFloat = 1800
-    private let spriteHeight: CGFloat = 60
+    private var spriteHeight: CGFloat { (character.map { $0.rig.size.height * 0.85 } ?? 60) * spriteScale }
+    /// Во сколько раз маскот меньше нарисованного: из конфига, у персонажа может быть свой.
+    private(set) var spriteScale: CGFloat = 0.75
     private var now: TimeInterval { CACurrentMediaTime() }
 
     // MARK: - Геометрия
@@ -137,6 +155,10 @@ final class PetWorld {
         return true
     }
     private var platformMotion: [String: (velocity: CGVector, reportedAt: TimeInterval)] = [:]
+    /// Размер экрана в прошлом кадре — чтобы заметить поворот.
+    private var lastScreenSize: CGSize = .zero
+    /// Где была карточка под маскотом в прошлом кадре — чтобы заметить «телепорт».
+    private var lastSurfaceRect: CGRect?
 
     private func trackMotion(of id: String, newFrame: CGRect?) {
         guard Self.geometryLags else { return }
@@ -184,30 +206,37 @@ final class PetWorld {
 
     // MARK: - Запуск и появление
 
-    func start(configFile: String, bundledFallback: String) async {
+    func start(configFile: String) async {
         guard !didStart else { return }
         didStart = true
 
-        if let (config, base) = await CDNContent.load(PetConfig.self, file: configFile, bundled: bundledFallback) {
-            self.config = config
-            presence.triggerOverrides = config.triggers
-            skin = config.skin()
-            if let ref = skin?.hat, ref != "none" { hat = await CDNContent.image(ref, relativeTo: base) }
-            // Звуки грузятся параллельно и не задерживают появление маскота.
-            let clips = config.soundClips, settings = config.sounds
-            Task { await sounds.load(clips, settings: settings, relativeTo: base) }
+        // Всё — только с CDN или из кэша. Нет конфига или персонажа — маскота нет.
+        guard let (config, base) = await CDNContent.load(PetConfig.self, file: configFile), config.enabled else { return }
+        self.config = config
+        presence.triggerOverrides = config.triggers
+        guard let ref = config.character(),
+              let character = await LoadedCharacter.load(ref.path, relativeTo: base) else {
+            print("MascotKit: персонаж не загрузился — маскот не показывается")
+            return
         }
-        guard config.enabled else { return }
+        self.character = character
+        spriteScale = CGFloat(min(max(ref.scale ?? config.scale, 0.3), 2))
+        skin = config.skin()
+        if let hatRef = skin?.hat, hatRef != "none" { hat = await CDNContent.image(hatRef, relativeTo: base) }
+        // Звуки грузятся параллельно и не задерживают появление маскота.
+        let clips = config.soundClips, settings = config.sounds
+        Task { await sounds.load(clips, settings: settings, relativeTo: base) }
 
         startSensors()
         // Даём главному экрану спокойно отрисоваться и зарегистрировать карточки.
         try? await Task.sleep(nanoseconds: 1_200_000_000)
+        isReady = true
         appearanceCheck()
     }
 
     /// Появление при открытии: первый вход за день или случайный шанс из конфига.
     func appearanceCheck() {
-        guard config.enabled, mode == .hidden else { return }
+        guard isReady, config.enabled, mode == .hidden else { return }
         let today = Date.now.formatted(.iso8601.year().month().day())
         let isFirstToday = UserDefaults.standard.string(forKey: "pet.lastDay") != today
         UserDefaults.standard.set(today, forKey: "pet.lastDay")
@@ -264,7 +293,7 @@ final class PetWorld {
 
     /// Действие от триггера на вьюхе. frame — глобальный фрейм вьюхи, из неё маскот и выпрыгнет.
     func perform(_ action: MascotAction, from frame: CGRect?) {
-        guard config.enabled else { return }
+        guard isReady, config.enabled else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         switch action {
         case .summon:
@@ -280,18 +309,18 @@ final class PetWorld {
             send(event, from: frame)
         case .react(let key):
             if mode == .hidden { summon(.from(frame)) }
-            react(key, animate: true)
+            react(key)
         }
     }
 
     func send(_ event: MascotEvent, from frame: CGRect? = nil) {
-        guard config.onEvents else { return }
+        guard isReady, config.onEvents else { return }
         if mode == .hidden { summon(.from(frame)) }
-        react(event.rawValue, animate: true)
+        react(event.rawValue)
     }
 
     private func shake() {
-        guard now - lastShake > 1.2 else { return }
+        guard isReady, now - lastShake > 1.2 else { return }
         lastShake = now
         if mode == .hidden {
             if config.onShake { summon(.drop, greeting: "shake") }
@@ -308,9 +337,9 @@ final class PetWorld {
     }
 
     private func chargingChanged(_ state: UIDevice.BatteryState) {
-        guard state == .charging, config.onCharging else { return }
+        guard isReady, state == .charging, config.onCharging else { return }
         if mode == .hidden { summon(.from(nil)) }
-        react("charging", animate: true)
+        react("charging")
     }
 
     // MARK: - Касания
@@ -349,10 +378,15 @@ final class PetWorld {
 
     func tapped() {
         guard mode.isGrounded || mode == .idle else { return }
-        vel = CGVector(dx: 0, dy: -420)
-        expressionOverride = (.happy, now + 1)
-        setMode(.airborne)
-        react("tap", animate: true)
+        if let name = config.reactions["tap"]?.animation, canAnimate(name) {
+            // В конфиге на тап задана анимация — делает её вместо прыжка.
+            react("tap")
+        } else {
+            vel = CGVector(dx: 0, dy: -420)
+            expressionOverride = (.happy, now + 1)
+            setMode(.airborne)
+            react("tap")
+        }
         lastInteraction = now
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
@@ -364,6 +398,10 @@ final class PetWorld {
         let dt = CGFloat(min(t - (lastStep ?? t), 1.0 / 20))
         lastStep = t
         guard mode != .hidden else { return nil }
+        if screen != lastScreenSize {
+            if lastScreenSize != .zero { screenDidResize() }
+            lastScreenSize = screen
+        }
 
         squash *= CGFloat(pow(0.002, Double(dt)))
         if scale < 1, mode != .leaving { scale = min(1, scale + dt * 3) }
@@ -435,6 +473,12 @@ final class PetWorld {
             setMode(.airborne)
             return
         }
+        // Карточка скакнула за один кадр (перестройка экрана, а не скролл) — не телепортируемся вместе с ней.
+        if let last = lastSurfaceRect, abs(rect.minY - last.minY) > 90 || abs(rect.minX - last.minX) > 90 {
+            dropFromCurrentPlace()
+            return
+        }
+        lastSurfaceRect = rect
         pos = CGPoint(x: rect.minX + platformOffset, y: rect.minY)
 
         // Сильный наклон телефона — скользит к краю и может сорваться.
@@ -471,6 +515,8 @@ final class PetWorld {
             react("snore", gain: 0.6)
         case .dizzy where t - modeStart > 0.5:
             react("dizzy", gain: 0.7)
+        case .performing:
+            walkPhase += Double(dt) * 10
         case .dancing, .celebrating:
             walkPhase += Double(dt) * 10
             if Int((t - modeStart) / 0.35) % 2 == 0 { facing = 1 } else { facing = -1 }
@@ -495,7 +541,33 @@ final class PetWorld {
             .min { $0.rect.minY < $1.rect.minY }
     }
 
+    /// Экран поменял размер (поворот, Split View): старые координаты карточек больше не верны.
+    /// Маскот отцепляется и падает с текущего места — приземлится уже на свежие.
+    private func screenDidResize() {
+        platformMotion.removeAll()
+        switch mode {
+        case .leaving:
+            hide()
+        case .grabbed:
+            break
+        default:
+            dropFromCurrentPlace()
+        }
+    }
+
+    private func dropFromCurrentPlace() {
+        lastSurfaceRect = nil
+        rope = nil
+        isRopeRetracting = false
+        pos.x = min(max(pos.x, 16), max(screen.width - 16, 16))
+        pos.y = min(max(pos.y, safeTop), floorY - 1)
+        vel = CGVector(dx: 0, dy: -120)
+        platformID = nil
+        setMode(.airborne)
+    }
+
     private func land(on id: String, rect: CGRect) {
+        lastSurfaceRect = nil
         platformID = id
         platformOffset = pos.x - rect.minX
         pos.y = rect.minY
@@ -503,6 +575,7 @@ final class PetWorld {
     }
 
     private func landOnFloor() {
+        lastSurfaceRect = nil
         platformID = "floor"
         pos.y = floorY
         platformOffset = pos.x - 12
@@ -562,7 +635,9 @@ final class PetWorld {
         case "sleep": setMode(.sleeping, duration: .random(in: 5...9))
         case "dance": setMode(.dancing, duration: 2.6)
         case "hop": hop()
-        default: setMode(.idle, duration: .random(in: 1.5...3))
+        default:
+            // Своя анимация персонажа тоже может быть поведением — с весом в behaviors.
+            if character?.rig.animations[pick] != nil { animate(pick) } else { setMode(.idle, duration: .random(in: 1.5...3)) }
         }
     }
 
@@ -621,11 +696,9 @@ final class PetWorld {
 
     // MARK: - Реакции
 
-    /// Реакция на событие из конфига: реплика, звук и (для триггеров и событий приложения) анимация.
-    /// - Parameters:
-    ///   - gain: громкость звука относительно реакции (тише для мягкого приземления).
-    ///   - animate: играть ли анимацию реакции. У физики (приземление, сон) — нет, чтобы не было петель.
-    private func react(_ key: String, gain: Float = 1, animate shouldAnimate: Bool = false) {
+    /// Реакция на любое событие из конфига: реплика, звук и анимация (встроенная или своя).
+    /// - Parameter gain: громкость звука относительно реакции (тише для мягкого приземления).
+    private func react(_ key: String, gain: Float = 1) {
         guard let reaction = config.reactions[key] else { return }
         let t = now
         if let cooldown = reaction.cooldown, let last = lastReacted[key], t - last < cooldown { return }
@@ -636,13 +709,24 @@ final class PetWorld {
             // Гарантированную реплику, пока она висит, обычные не перебивают.
             let isPinnedNow = bubble.map { $0.pinned && $0.until > t } ?? false
             if guaranteed || !isPinnedNow {
-                bubble = (line.text, t + (line.duration ?? (guaranteed ? 4.5 : 2.4)), guaranteed)
+                let standard = config.bubble.duration
+                bubble = (line.text, t + (line.duration ?? (guaranteed ? standard * 1.9 : standard)), guaranteed)
             }
         }
         if reaction.sound?.isEmpty == false, Double.random(in: 0..<1) < (reaction.soundChance ?? 1) {
             sounds.play(key, gain: gain * Float(reaction.volume ?? 1))
         }
-        if shouldAnimate, let name = reaction.animation { animate(name) }
+        if let name = reaction.animation, reactionDepth == 0 {
+            reactionDepth += 1
+            animate(name)
+            reactionDepth -= 1
+        }
+    }
+
+    private static let builtInAnimations: Set<String> = ["celebrate", "wave", "dance", "sit", "sleep", "hop", "jump"]
+
+    private func canAnimate(_ name: String) -> Bool {
+        Self.builtInAnimations.contains(name) || character?.rig.animations[name] != nil
     }
 
     /// Анимация по имени. Если он ещё в воздухе или только появляется — сыграет после приземления.
@@ -661,7 +745,10 @@ final class PetWorld {
         case "jump":
             vel = CGVector(dx: 0, dy: -420)
             setMode(.airborne)
-        default: break
+        default:
+            guard let animation = character?.rig.animations[name] else { return }
+            performing = name
+            setMode(.performing, duration: animation.duration)
         }
         lastInteraction = now
     }
@@ -676,6 +763,14 @@ final class PetWorld {
         case .grabbed: expression = .scared
         case .airborne: expression = isThrown || dizzyOnLanding ? .scared : .happy
         case .celebrating, .dancing, .waving, .leaving: expression = .happy
+        case .performing:
+            switch performing.flatMap({ character?.rig.animations[$0]?.expression }) {
+            case "normal": expression = .normal
+            case "sleepy": expression = .sleepy
+            case "dizzy": expression = .dizzy
+            case "scared": expression = .scared
+            default: expression = .happy
+            }
         default: expression = .normal
         }
         if let override = expressionOverride, override.until > t { expression = override.0 }
@@ -692,7 +787,9 @@ final class PetWorld {
             rope: rope,
             bubble: bubble.flatMap { $0.until > t ? $0.text : nil },
             blink: t.truncatingRemainder(dividingBy: 3.4) < 0.12,
-            time: t
+            time: t,
+            animation: mode == .performing ? performing : nil,
+            modeTime: t - modeStart
         )
     }
 

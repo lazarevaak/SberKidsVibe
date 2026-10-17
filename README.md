@@ -6,9 +6,9 @@
 
 | Модуль | Что делает |
 |---|---|
-| [`Packages/MascotKit`](Packages/MascotKit) | Маскот, который живёт на интерфейсе: ходит по карточкам, прыгает, реагирует на наклон, тряску, зарядку и события приложения, говорит реплики и издаёт звуки. Его можно схватить и кинуть |
+| [`Packages/MascotKit`](Packages/MascotKit) | Маскот, который живёт на интерфейсе: ходит по карточкам, прыгает, реагирует на наклон, тряску, зарядку и события приложения, говорит реплики и издаёт звуки. Его можно схватить и кинуть. Персонажа (хоть машинку) художник собирает из картинок по JSON — без кода |
 | [`Packages/VinesKit`](Packages/VinesKit) | Сезонные лианы сверху экрана: качаются и срываются смахом. Паки: матрица, осень, Хэллоуин, Новый год |
-| [`cdn/`](cdn) | Контент приколов: конфиги, картинки, звуки. Меняется без релиза приложения |
+| [`karablik27/sberkids-cdn`](https://github.com/karablik27/sberkids-cdn) | Контент приколов в отдельном публичном репозитории: конфиги, персонажи, звуки, картинки. Раздаётся через GitHub Pages — `https://karablik27.github.io/sberkids-cdn/` — и меняется без релиза приложения |
 | [`GreenAlfaKids/`](GreenAlfaKids) | Демо-приложение: главный экран по макету и встраивание обоих модулей |
 
 ## Требования стека
@@ -25,8 +25,8 @@
 import MascotKit
 import VinesKit
 
-Mascot.contentURL = URL(string: "https://…/cdn/")
-Vines.contentURL  = URL(string: "https://…/cdn/")
+Mascot.contentURL = URL(string: "https://karablik27.github.io/sberkids-cdn/")
+Vines.contentURL  = URL(string: "https://karablik27.github.io/sberkids-cdn/")
 
 HomeView()
     .hangingVines()
@@ -36,7 +36,7 @@ avatar.mascotHome().mascotTrigger("avatar", .longPress(), .toggle)
 card.mascotSurface()
 ```
 
-Подробности — в README каждого пакета и в [`cdn/README.md`](cdn/README.md).
+Подробности — в README каждого пакета и в [README CDN-репозитория](https://github.com/karablik27/sberkids-cdn#readme).
 
 ## Запуск
 
@@ -44,7 +44,7 @@ card.mascotSurface()
 
 Аргументы запуска для демо:
 - `-MascotAlwaysAppear YES` — маскот приходит при каждом запуске;
-- `-CDNBaseURL <url>` — другой адрес CDN;
+- `-CDNBaseURL <url>` — другой адрес CDN; для проверки правок до публикации — локальная копия CDN-репозитория: `file:///…/sberkids-cdn/` (только в симуляторе);
 - `-FunLiteMode YES` — облегчённый режим для слабых устройств.
 
 Тесты пакета: схема `MascotKit` → Test.

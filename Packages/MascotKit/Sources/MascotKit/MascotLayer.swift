@@ -2,7 +2,7 @@
 //  MascotLayer.swift
 //  MascotKit
 //
-//  Слой, в котором рисуется маскот, и его внешний вид.
+//  Слой, в котором живёт маскот: персонаж из деталей (RigSprite), реплики и касания.
 //  Подключение и триггеры — в Mascot.swift.
 //
 //  Касания ловит только сам маскот — остальной экран работает как обычно.
@@ -23,7 +23,7 @@ struct PetLayer: View {
         TimelineView(.animation(minimumInterval: DevicePerformance.minimumFrameInterval,
                                 paused: !presence.isVisible || !isRunning)) { _ in
             ZStack(alignment: .topLeading) {
-                if let s = world.step() {
+                if let s = world.step(), let character = world.character {
                     if let rope = s.rope {
                         Path { p in
                             p.move(to: CGPoint(x: s.position.x, y: rope.top))
@@ -33,16 +33,33 @@ struct PetLayer: View {
                         .allowsHitTesting(false)
                     }
 
-                    PetSprite(s: s, skin: world.skin, hat: world.hat)
+                    let metrics = SpriteMetrics(character: character, facing: s.facing, scale: world.spriteScale)
+
+                    RigSprite(s: s, character: character, hat: world.hat, hideHat: world.skin?.hat == "none")
+                        // Уменьшаем и картинку, и место под неё — касания ловит только видимый маскот.
+                        .scaleEffect(metrics.scale)
+                        .frame(width: metrics.size.width, height: metrics.size.height)
                         .contentShape(Rectangle())
                         .gesture(dragGesture)
-                        .position(x: s.position.x, y: s.position.y - PetSprite.size.height / 2)
+                        .position(x: s.position.x - metrics.footOffset.x, y: s.position.y - metrics.footOffset.y)
 
                     if let text = s.bubble {
-                        SpeechBubble(text: text)
-                            .fixedSize()
-                            .position(x: min(max(s.position.x, 80), world.overlayFrame.width - 80),
-                                      y: s.position.y - PetSprite.size.height - 22)
+                        // Реплика растёт вверх от точки над головой, сколько бы строк в ней ни было.
+                        let style = world.config.bubble
+                        let width = CGFloat(style.maxWidth)
+                        let screenWidth = world.overlayFrame.width
+                        let margin: CGFloat = 8
+                        SpeechBubble(text: text, style: style)
+                            // Центр реплики — над маскотом, по её настоящей ширине (короткая фраза уже окна);
+                            // у края экрана реплика сдвигается ровно настолько, чтобы влезть.
+                            .alignmentGuide(.leading) { d in
+                                let left = min(max(s.position.x - d.width / 2, margin), screenWidth - margin - d.width)
+                                return -(left - margin)
+                            }
+                            // Ширина окна ограничивает перенос строк; растёт реплика вверх от головы.
+                            .frame(width: width, height: 1, alignment: .bottomLeading)
+                            .position(x: margin + width / 2,
+                                      y: s.position.y - metrics.foot.y + metrics.head.y - 14 * metrics.scale - 6)
                             .allowsHitTesting(false)
                             .transition(.opacity)
                     }
@@ -52,6 +69,7 @@ struct PetLayer: View {
         }
         .onGlobalFrameChange { world.overlayFrame = $0 }
     }
+
 
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
@@ -81,215 +99,59 @@ struct PetLayer: View {
     }
 }
 
+/// Размеры текущего персонажа: где у него опора и голова.
+private struct SpriteMetrics {
+    let size: CGSize
+    let foot: CGPoint
+    let head: CGPoint
+    /// Смещение центра рамки от точки опоры (с учётом того, куда он смотрит).
+    let footOffset: CGPoint
+
+    let scale: CGFloat
+
+    /// Все размеры — уже с учётом масштаба.
+    init(character: LoadedCharacter, facing: CGFloat, scale: CGFloat) {
+        self.scale = scale
+        let drawn = character.rig.size
+        let drawnFoot = character.rig.footPoint
+        let drawnHead = character.rig.headPoint
+        size = CGSize(width: drawn.width * scale, height: drawn.height * scale)
+        foot = CGPoint(x: drawnFoot.x * scale, y: drawnFoot.y * scale)
+        head = CGPoint(x: drawnHead.x * scale, y: drawnHead.y * scale)
+        let footX = facing >= 0 ? foot.x : size.width - foot.x
+        footOffset = CGPoint(x: footX - size.width / 2, y: foot.y - size.height / 2)
+    }
+}
+
 // MARK: - Реплика
 
 private struct SpeechBubble: View {
     let text: String
+    let style: PetBubbleStyle
 
     var body: some View {
+        let size = CGFloat(style.fontSize)
         Text(text)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color(hex: 0x1C1C1E))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-    }
-}
-
-// MARK: - Обезьянка
-
-/// Рисуется кодом, а не кадрами — поэтому позы и эмоции бесплатные,
-/// а с CDN приходят только цвета и шапка.
-struct PetSprite: View {
-    static let size = CGSize(width: 64, height: 72)
-
-    let s: PetSnapshot
-    let skin: PetSkin?
-    let hat: UIImage?
-
-    private var fur: Color { Color(hexString: skin?.fur) ?? Color(hex: 0x7A4B2C) }
-    private var furDark: Color { Color(hex: 0x4E2F1A) }
-    private var face: Color { Color(hexString: skin?.face) ?? Color(hex: 0xE8B98F) }
-
-    private var isSitting: Bool { s.mode == .sitting || s.mode == .sleeping || s.mode == .dizzy }
-    private var isMoving: Bool { [.walking, .airborne, .grabbed, .dancing, .celebrating, .descending].contains(s.mode) }
-
-    var body: some View {
-        let swing = isMoving ? sin(s.walkPhase) : 0
-        let bodyDrop: CGFloat = isSitting ? 7 : 0
-
-        ZStack {
-            tail.offset(y: bodyDrop)
-            legs(swing: swing)
-            // Туловище
-            Ellipse().fill(LinearGradient(colors: [fur, furDark], startPoint: .top, endPoint: .bottom))
-                .frame(width: 28, height: 26).position(x: 32, y: 52 + bodyDrop)
-            Ellipse().fill(face.opacity(0.9))
-                .frame(width: 15, height: 15).position(x: 32, y: 55 + bodyDrop)
-            arms(swing: swing).offset(y: bodyDrop)
-            head.offset(y: bodyDrop + (s.mode == .dancing || s.mode == .celebrating ? CGFloat(abs(sin(s.walkPhase))) * -3 : 0))
-            effects.offset(y: bodyDrop)
-        }
-        .frame(width: Self.size.width, height: Self.size.height)
-        // Десятки фигур рисуются одним растровым слоем — дешевле для видеокарты.
-        // Отступ — чтобы не обрезались звёздочки и «z» над головой.
-        .padding(16)
-        .drawingGroup()
-        .padding(-16)
-        .scaleEffect(x: s.facing * (1 + s.squash), y: 1 - s.squash, anchor: .bottom)
-        .rotationEffect(.degrees(s.spin))
-        .scaleEffect(s.scale, anchor: .bottom)
+            .font(.system(size: size, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color(hexString: style.textColor) ?? Color(hex: 0x1C1C1E))
+            .multilineTextAlignment(.center)
+            .lineLimit(style.maxLines)
+            .fixedSize(horizontal: false, vertical: true)
+            // Отступы растут вместе со шрифтом, чтобы крупный текст не прилипал к краям.
+            .padding(.horizontal, size * 0.75)
+            .padding(.vertical, size * 0.42)
+            .background(background)
+            .shadow(color: .black.opacity(0.08 + 0.06 * style.opacity), radius: 6, y: 2)
     }
 
-    // MARK: Части тела
-
-    private var tail: some View {
-        Path { p in
-            p.move(to: CGPoint(x: 18, y: 58))
-            p.addCurve(to: CGPoint(x: 6, y: 40), control1: CGPoint(x: 4, y: 60), control2: CGPoint(x: 0, y: 48))
-            p.addQuadCurve(to: CGPoint(x: 13, y: 38), control: CGPoint(x: 10, y: 33))
-        }
-        .stroke(furDark, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-        .rotationEffect(.degrees(sin(s.time * 2.2) * 6), anchor: UnitPoint(x: 0.28, y: 0.8))
-    }
-
-    private func legs(swing: Double) -> some View {
-        let angle = isSitting ? 70.0 : swing * 30
+    /// Полупрозрачный фон: размытие того, что под репликой, + цвет фона с заданной непрозрачностью.
+    private var background: some View {
+        let shape = RoundedRectangle(cornerRadius: CGFloat(style.cornerRadius), style: .continuous)
+        let tint = (Color(hexString: style.background) ?? .white).opacity(style.opacity)
         return ZStack {
-            leg.rotationEffect(.degrees(isSitting ? -angle : angle), anchor: .top).position(x: 26, y: isSitting ? 66 : 67)
-            leg.rotationEffect(.degrees(isSitting ? angle : -angle), anchor: .top).position(x: 38, y: isSitting ? 66 : 67)
-        }
-    }
-
-    private var leg: some View {
-        Capsule().fill(furDark).frame(width: 6.5, height: 12)
-    }
-
-    private func arms(swing: Double) -> some View {
-        let wave = sin(s.time * 12) * 25
-        let (left, right): (Double, Double) = switch s.mode {
-        case .waving: (15, -150 + wave)
-        case .celebrating, .dancing: (150 + wave, -150 - wave)
-        case .grabbed, .airborne: (120 + swing * 20, -120 - swing * 20)
-        case .descending: (160, -160)
-        case .sitting, .sleeping: (-10, 10)
-        default: (-swing * 25, swing * 25)
-        }
-        return ZStack {
-            arm.rotationEffect(.degrees(left), anchor: .top).position(x: 20, y: 50)
-            arm.rotationEffect(.degrees(right), anchor: .top).position(x: 44, y: 50)
-        }
-    }
-
-    private var arm: some View {
-        Capsule().fill(fur).frame(width: 5.5, height: 14).offset(y: 5)
-    }
-
-    private var head: some View {
-        ZStack {
-            Circle().fill(furDark).frame(width: 13).position(x: 17, y: 25)
-            Circle().fill(furDark).frame(width: 13).position(x: 47, y: 25)
-            Circle().fill(face).frame(width: 7).position(x: 17, y: 25)
-            Circle().fill(face).frame(width: 7).position(x: 47, y: 25)
-            Circle().fill(LinearGradient(colors: [fur, furDark], startPoint: .top, endPoint: .bottom))
-                .frame(width: 30, height: 30).position(x: 32, y: 24)
-            Ellipse().fill(face).frame(width: 23, height: 18).position(x: 33, y: 29)
-            eyes
-            mouth
-            hatView
-        }
-    }
-
-    @ViewBuilder
-    private var eyes: some View {
-        switch s.expression {
-        case .happy:
-            ForEach([28.0, 38.0], id: \.self) { x in
-                Path { p in p.addArc(center: CGPoint(x: x, y: 26), radius: 3, startAngle: .degrees(200), endAngle: .degrees(340), clockwise: false) }
-                    .stroke(Color(hex: 0x2B1A10), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-            }
-        case .sleepy:
-            ForEach([28.0, 38.0], id: \.self) { x in
-                Capsule().fill(Color(hex: 0x2B1A10)).frame(width: 6, height: 1.6).position(x: x, y: 25)
-            }
-        case .dizzy:
-            ForEach([28.0, 38.0], id: \.self) { x in
-                Circle().trim(from: 0, to: 0.8)
-                    .stroke(Color(hex: 0x2B1A10), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                    .frame(width: 6, height: 6)
-                    .rotationEffect(.degrees(s.time * 720))
-                    .position(x: x, y: 25)
-            }
-        case .scared, .normal:
-            let big = s.expression == .scared
-            ForEach([28.0, 38.0], id: \.self) { x in
-                ZStack {
-                    Circle().fill(.white).frame(width: big ? 9 : 7.5)
-                    Circle().fill(Color(hex: 0x1C1C1E)).frame(width: big ? 2.6 : 4).offset(x: 1.2)
-                }
-                .scaleEffect(y: s.blink && !big ? 0.1 : 1)
-                .position(x: x, y: 25)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var mouth: some View {
-        switch s.expression {
-        case .happy:
-            Ellipse().fill(Color(hex: 0xC2413B)).frame(width: 7, height: 5).position(x: 33, y: 33)
-        case .scared:
-            Ellipse().fill(Color(hex: 0x2B1A10)).frame(width: 4, height: 5).position(x: 33, y: 34)
-        default:
-            Path { p in p.addArc(center: CGPoint(x: 33, y: 31.5), radius: 3, startAngle: .degrees(20), endAngle: .degrees(160), clockwise: false) }
-                .stroke(Color(hex: 0x2B1A10), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-        }
-    }
-
-    @ViewBuilder
-    private var hatView: some View {
-        if skin?.hat == "none" {
-            EmptyView()
-        } else if let hat {
-            Image(uiImage: hat).resizable().scaledToFit().frame(width: 36).position(x: 32, y: 9)
-        } else {
-            // Шапка как на аватарке.
-            Ellipse().fill(LinearGradient(colors: [Color(hex: 0xE07A3A), Color(hex: 0xA94E20)], startPoint: .top, endPoint: .bottom))
-                .frame(width: 30, height: 18).position(x: 32, y: 13)
-            Capsule().fill(Color(hex: 0x8C3F18)).frame(width: 32, height: 6).position(x: 32, y: 18)
-        }
-    }
-
-    @ViewBuilder
-    private var effects: some View {
-        switch s.mode {
-        case .dizzy:
-            ForEach(0..<3, id: \.self) { i in
-                let a = s.time * 4 + Double(i) * 2.09
-                Image(systemName: "star.fill")
-                    .font(.system(size: 7))
-                    .foregroundStyle(Color(hex: 0xFFC83D))
-                    .position(x: 32 + cos(a) * 16, y: 6 + sin(a) * 4)
-            }
-        case .sleeping:
-            ForEach(0..<3, id: \.self) { i in
-                let u = (s.time * 0.5 + Double(i) / 3).truncatingRemainder(dividingBy: 1)
-                Text("z")
-                    .font(.system(size: 8 + u * 6, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(hex: 0x6E7BA8).opacity(1 - u))
-                    .position(x: 48 + u * 10, y: 12 - u * 18)
-            }
-        case .celebrating:
-            ForEach(0..<4, id: \.self) { i in
-                let a = Double(i) * 1.57 + s.time * 3
-                Image(systemName: "sparkle")
-                    .font(.system(size: 8))
-                    .foregroundStyle([Color(hex: 0xFFC83D), Color(hex: 0x3DBE55), Color(hex: 0x8E7BEF), Color(hex: 0xFF6FB5)][i])
-                    .position(x: 32 + cos(a) * 26, y: 30 + sin(a) * 22)
-            }
-        default:
-            EmptyView()
+            if style.blur { shape.fill(.ultraThinMaterial) }
+            shape.fill(tint)
+            shape.stroke(Color.white.opacity(0.5), lineWidth: 0.5)
         }
     }
 }

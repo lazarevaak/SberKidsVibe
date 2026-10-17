@@ -8,12 +8,12 @@ import XCTest
 
 final class VisitLimiterTests: XCTestCase {
     @MainActor
-    private func tapReaction() throws -> PetReaction {
+    private func tapReaction() throws -> MascotReaction {
         let json = """
         { "say": [ "Хи-хи!",
                    { "text": "А ты видел новую цель в Копилках?", "maxPerVisit": 3, "first": true } ] }
         """
-        return try JSONDecoder().decode(PetReaction.self, from: Data(json.utf8))
+        return try JSONDecoder().decode(MascotReaction.self, from: Data(json.utf8))
     }
 
     /// Сценарий из ТЗ: гарантированная реплика звучит 3 раза за визит, потом — обычные,
@@ -47,7 +47,7 @@ final class VisitLimiterTests: XCTestCase {
 
     @MainActor
     func testRegularLinesRespectSayChance() throws {
-        var reaction = try JSONDecoder().decode(PetReaction.self, from: Data(#"{ "say": ["Хи-хи!"] }"#.utf8))
+        var reaction = try JSONDecoder().decode(MascotReaction.self, from: Data(#"{ "say": ["Хи-хи!"] }"#.utf8))
         reaction.sayChance = 0.3
         var limiter = VisitLimiter()
         XCTAssertNil(limiter.pickLine(for: "tap", in: reaction, roll: { 0.5 }))
@@ -56,7 +56,7 @@ final class VisitLimiterTests: XCTestCase {
 
     @MainActor
     func testReactionLimitPerVisit() throws {
-        let reaction = try JSONDecoder().decode(PetReaction.self, from: Data(#"{ "maxPerVisit": 2 }"#.utf8))
+        let reaction = try JSONDecoder().decode(MascotReaction.self, from: Data(#"{ "maxPerVisit": 2 }"#.utf8))
         var limiter = VisitLimiter()
         XCTAssertTrue(limiter.allow("shake", reaction))
         XCTAssertTrue(limiter.allow("shake", reaction))

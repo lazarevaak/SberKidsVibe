@@ -14,7 +14,7 @@ struct VisitLimiter {
     mutating func reset() { counts = [:] }
 
     /// Можно ли сработать реакции ещё раз за этот визит. Если да — засчитывает срабатывание.
-    mutating func allow(_ key: String, _ reaction: PetReaction) -> Bool {
+    mutating func allow(_ key: String, _ reaction: MascotReaction) -> Bool {
         if let limit = reaction.maxPerVisit, counts[key, default: 0] >= limit { return false }
         counts[key, default: 0] += 1
         return true
@@ -24,8 +24,8 @@ struct VisitLimiter {
     /// иначе — случайная из обычных с вероятностью sayChance.
     /// - Parameter roll: случайное число 0…1 (подменяется в тестах).
     mutating func pickLine(for key: String,
-                           in reaction: PetReaction,
-                           roll: () -> Double = { .random(in: 0..<1) }) -> (line: PetLine, guaranteed: Bool)? {
+                           in reaction: MascotReaction,
+                           roll: () -> Double = { .random(in: 0..<1) }) -> (line: MascotLine, guaranteed: Bool)? {
         guard let lines = reaction.say, !lines.isEmpty else { return nil }
         let available = lines.indices.filter { i in
             guard let limit = lines[i].maxPerVisit else { return true }

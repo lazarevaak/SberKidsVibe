@@ -1,14 +1,14 @@
 //
-//  PetConfig.swift
+//  MascotConfig.swift
 //  MascotKit
 //
-//  Конфиг «Жильца» с CDN: когда он появляется, как себя ведёт (веса),
-//  что говорит и во что одет по сезону. Все поля необязательны.
+//  Конфиг маскота с CDN (pet.json): когда он появляется, кто он, как себя ведёт,
+//  что говорит и как звучит, во что одет по сезону. Все поля необязательны.
 //
 
 import Foundation
 
-struct PetConfig: Decodable {
+struct MascotConfig: Decodable {
     var enabled = true
 
     // Когда появляется
@@ -25,23 +25,23 @@ struct PetConfig: Decodable {
     var stayMinutes = 2.0
 
     // Как себя ведёт
-    var behaviors: [String: Double] = PetConfig.defaultBehaviors
+    var behaviors: [String: Double] = MascotConfig.defaultBehaviors
     var walkSpeed = 42.0
     /// Ночью (22:00–7:00) вес «спать» умножается на это число.
     var nightSleepBoost = 4.0
 
-    /// Событие → реакция: реплика, звук, анимация. Итог слияния встроенных значений,
+    /// Событие → реакция: реплика, звук, анимация. Итог слияния технических значений по умолчанию,
     /// старых полей phrases/sounds и нового reactions (последнее важнее).
-    var reactions: [String: PetReaction] = PetConfig.defaultReactions
+    var reactions: [String: MascotReaction] = MascotConfig.defaultReactions
     /// Общие настройки звука: выключатель и громкость.
-    var sounds = PetSounds()
-    var skins: [PetSkin] = []
+    var sounds = MascotSoundSettings()
+    var skins: [MascotSkin] = []
     /// Персонажи из деталей (character.json на CDN). Нет подходящего — маскот не появляется.
-    var characters: [PetCharacterRef] = []
+    var characters: [MascotCharacterRef] = []
     /// Размер маскота относительно нарисованного (1 — как в character.json). У персонажа может быть свой.
     var scale = 0.75
     /// Внешний вид реплик: шрифт, ширина, строки, цвета, сколько висит.
-    var bubble = PetBubbleStyle()
+    var bubble = MascotBubbleStyle()
     /// Принудительный персонаж по id — для демо.
     var forceCharacter: String?
     /// Принудительный костюм по id — для демо.
@@ -50,44 +50,51 @@ struct PetConfig: Decodable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, firstOpenOfDay, randomChance, onShake, onEvents, onCharging, triggers
-        case stayMinutes, behaviors, walkSpeed, nightSleepBoost, phrases, sounds, reactions, skins, forceSkin
-        case characters, forceCharacter, scale, bubble
+        case enabled
+        case firstOpenOfDay, randomChance, onShake, onEvents, onCharging, triggers, stayMinutes
+        case behaviors, walkSpeed, nightSleepBoost
+        case phrases, sounds, reactions, bubble
+        case characters, forceCharacter, scale, skins, forceSkin
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.value(.enabled, default: enabled)
+
+        // Когда появляется
         firstOpenOfDay = try c.value(.firstOpenOfDay, default: firstOpenOfDay)
         randomChance = try c.value(.randomChance, default: randomChance)
         onShake = try c.value(.onShake, default: onShake)
-        triggers = try c.value(.triggers, default: [:])
         onEvents = try c.value(.onEvents, default: onEvents)
         onCharging = try c.value(.onCharging, default: onCharging)
+        triggers = try c.value(.triggers, default: [:])
         stayMinutes = try c.value(.stayMinutes, default: stayMinutes)
+
+        // Как себя ведёт: веса из JSON дополняют значения по умолчанию
+        behaviors.merge(try c.value(.behaviors, default: [:])) { $1 }
         walkSpeed = try c.value(.walkSpeed, default: walkSpeed)
         nightSleepBoost = try c.value(.nightSleepBoost, default: nightSleepBoost)
-        forceSkin = try c.decodeIfPresent(String.self, forKey: .forceSkin)
-        sounds = try c.value(.sounds, default: sounds)
-        skins = try c.value(.skins, default: [])
-        characters = try c.value(.characters, default: [])
-        scale = try c.value(.scale, default: scale)
-        bubble = try c.value(.bubble, default: bubble)
-        forceCharacter = try c.decodeIfPresent(String.self, forKey: .forceCharacter)
-        // Ключи, которых нет в JSON, берутся из значений по умолчанию.
-        behaviors.merge(try c.value(.behaviors, default: [:])) { $1 }
 
-        // Старые поля: phrases — только реплики, sounds — только звуки.
+        // Что говорит и как звучит. Старые поля: phrases — только реплики, sounds — только звуки;
+        // reactions важнее: указанные в нём свойства заменяют прежние, остальные остаются.
+        sounds = try c.value(.sounds, default: sounds)
         for (key, lines) in try c.value(.phrases, default: [String: [String]]()) {
-            reactions[key, default: PetReaction()].say = lines.map(PetLine.init(text:))
+            reactions[key, default: MascotReaction()].say = lines.map(MascotLine.init(text:))
         }
         for (key, files) in sounds.clips {
-            reactions[key, default: PetReaction()].sound = files
+            reactions[key, default: MascotReaction()].sound = files
         }
-        // Новое поле: указанные в JSON свойства реакции заменяют прежние, остальные остаются.
-        for (key, reaction) in try c.value(.reactions, default: [String: PetReaction]()) {
-            reactions[key] = reaction.merged(over: reactions[key] ?? PetReaction())
+        for (key, reaction) in try c.value(.reactions, default: [String: MascotReaction]()) {
+            reactions[key] = reaction.merged(over: reactions[key] ?? MascotReaction())
         }
+        bubble = try c.value(.bubble, default: bubble)
+
+        // Кто он и как выглядит
+        characters = try c.value(.characters, default: [])
+        forceCharacter = try c.decodeIfPresent(String.self, forKey: .forceCharacter)
+        scale = try c.value(.scale, default: scale)
+        skins = try c.value(.skins, default: [])
+        forceSkin = try c.decodeIfPresent(String.self, forKey: .forceSkin)
     }
 
     /// Все файлы звуков по событиям — их нужно скачать заранее.
@@ -96,7 +103,7 @@ struct PetConfig: Decodable {
     }
 
     /// Персонаж на сегодня: принудительный, иначе сезонный важнее круглогодичного, среди равных — по весам.
-    func character(on date: Date = .now) -> PetCharacterRef? {
+    func character(on date: Date = .now) -> MascotCharacterRef? {
         if let forceCharacter, let pick = characters.first(where: { $0.id == forceCharacter }) { return pick }
         let active = characters.filter { $0.weight > 0 && Season.isActive(from: $0.from, to: $0.to, on: date) }
         guard let top = active.map(\.priority).max() else { return nil }
@@ -105,7 +112,7 @@ struct PetConfig: Decodable {
         return candidates.first { roll -= $0.weight; return roll < 0 } ?? candidates.last
     }
 
-    func skin(on date: Date = .now) -> PetSkin? {
+    func skin(on date: Date = .now) -> MascotSkin? {
         if let forceSkin, let skin = skins.first(where: { $0.id == forceSkin }) { return skin }
         return skins.filter { Season.isActive(from: $0.from, to: $0.to, on: date) }.max { $0.priority < $1.priority }
     }
@@ -116,15 +123,15 @@ struct PetConfig: Decodable {
 
     /// Технические значения по умолчанию — паузы, чтобы повторяющиеся события не «строчили».
     /// Реплик и звуков в коде нет: весь контент приходит из конфига.
-    static let defaultReactions: [String: PetReaction] = [
-        "tilt": PetReaction(cooldown: 4),
-        "upsideDown": PetReaction(cooldown: 6),
-        "snore": PetReaction(cooldown: 2.8),
-        "dizzy": PetReaction(cooldown: 1.1),
+    static let defaultReactions: [String: MascotReaction] = [
+        "tilt": MascotReaction(cooldown: 4),
+        "upsideDown": MascotReaction(cooldown: 6),
+        "snore": MascotReaction(cooldown: 2.8),
+        "dizzy": MascotReaction(cooldown: 1.1),
     ]
 }
 
-struct PetSkin: Decodable {
+struct MascotSkin: Decodable {
     var id: String
     var from: String?
     var to: String?
@@ -136,7 +143,7 @@ struct PetSkin: Decodable {
 
 /// Общие настройки звука: "enabled", "volume". Списки файлов по событиям здесь
 /// тоже понимаются (старый формат), но правильнее задавать их в reactions → sound.
-struct PetSounds: Decodable {
+struct MascotSoundSettings: Decodable {
     var enabled = true
     var volume = 0.6
     var clips: [String: [String]] = [:]
@@ -164,106 +171,9 @@ struct PetSounds: Decodable {
     }
 }
 
-/// Реакция на событие. Все поля необязательны: не указано — значит нет.
-struct PetReaction: Decodable {
-    /// Реплики — каждый раз случайная. Реплика может быть строкой или объектом PetLine
-    /// (с лимитом за визит и гарантированным показом).
-    var say: [PetLine]?
-    /// Вероятность реплики (0…1), по умолчанию 1.
-    var sayChance: Double?
-    /// Звуки — каждый раз случайный.
-    var sound: [String]?
-    var soundChance: Double?
-    /// Громкость этого звука относительно общей (0…1).
-    var volume: Double?
-    /// Анимация: celebrate, wave, dance, sit, sleep, hop, jump.
-    /// Срабатывает на событиях приложения и триггерах, а не на физике (приземление и т. п.).
-    var animation: String?
-    /// Не повторять реакцию чаще, чем раз в N секунд.
-    var cooldown: Double?
-    /// Сколько раз реакция может сработать за один визит (пока маскот на экране).
-    /// Счётчик сбрасывается, когда маскот ушёл и его позвали снова.
-    var maxPerVisit: Int?
-
-    init(say: [String]? = nil, sound: [String]? = nil, animation: String? = nil, cooldown: Double? = nil) {
-        self.say = say?.map(PetLine.init(text:))
-        self.sound = sound
-        self.animation = animation
-        self.cooldown = cooldown
-    }
-
-    func merged(over base: PetReaction) -> PetReaction {
-        var result = base
-        if let say { result.say = say }
-        if let sayChance { result.sayChance = sayChance }
-        if let sound { result.sound = sound }
-        if let soundChance { result.soundChance = soundChance }
-        if let volume { result.volume = volume }
-        if let animation { result.animation = animation }
-        if let cooldown { result.cooldown = cooldown }
-        if let maxPerVisit { result.maxPerVisit = maxPerVisit }
-        return result
-    }
-}
-
-/// Реплика. В JSON — просто строка или объект:
-/// { "text": "…", "maxPerVisit": 3, "first": true, "duration": 5 }
-struct PetLine: Decodable {
-    var text: String
-    /// Сколько раз эту реплику можно сказать за один визит.
-    var maxPerVisit: Int?
-    /// Гарантированная: пока лимит не исчерпан, говорится она, без учёта sayChance,
-    /// и пока висит — другие реплики её не перебивают.
-    var first: Bool?
-    /// Сколько секунд висит реплика.
-    var duration: Double?
-
-    init(text: String) { self.text = text }
-
-    private enum CodingKeys: String, CodingKey { case text, maxPerVisit, first, duration }
-
-    init(from decoder: Decoder) throws {
-        if let text = try? decoder.singleValueContainer().decode(String.self) {
-            self.text = text
-            return
-        }
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        text = try c.decode(String.self, forKey: .text)
-        maxPerVisit = try c.decodeIfPresent(Int.self, forKey: .maxPerVisit)
-        first = try c.decodeIfPresent(Bool.self, forKey: .first)
-        duration = try c.decodeIfPresent(Double.self, forKey: .duration)
-    }
-}
-
-/// Ссылка на персонажа из деталей.
-struct PetCharacterRef: Decodable {
-    var id: String
-    /// Путь к character.json — относительно конфига или полный URL.
-    var path: String
-    var from: String?
-    var to: String?
-    var weight: Double
-    /// Свой размер персонажа — важнее общего scale.
-    var scale: Double?
-
-    var priority: Int { from == nil ? 0 : 1 }
-
-    private enum CodingKeys: String, CodingKey { case id, path, from, to, weight, scale }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        path = try c.decode(String.self, forKey: .path)
-        from = try c.decodeIfPresent(String.self, forKey: .from)
-        to = try c.decodeIfPresent(String.self, forKey: .to)
-        weight = try c.decodeIfPresent(Double.self, forKey: .weight) ?? 1
-        scale = try c.decodeIfPresent(Double.self, forKey: .scale)
-    }
-}
-
 /// Окно реплики. Все поля необязательны; значения ограничены разумными пределами,
 /// чтобы опечатка в конфиге не закрыла пол-экрана.
-struct PetBubbleStyle: Decodable {
+struct MascotBubbleStyle: Decodable {
     var fontSize: Double = 12
     var maxWidth: Double = 200
     var maxLines = 3

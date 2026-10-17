@@ -167,7 +167,7 @@ struct LoadedCharacter {
     let images: [String: UIImage]
 
     /// Загружает character.json и все его картинки. Пути картинок — относительно character.json.
-    /// Если не загрузилась хоть одна картинка — персонаж не показывается (лучше встроенный, чем «с дырками»).
+    /// Если не загрузилась хоть одна картинка — персонаж не показывается (лучше никакого, чем «с дырками»).
     static func load(_ ref: String, relativeTo base: URL?) async -> LoadedCharacter? {
         guard let url = URL(string: ref, relativeTo: base)?.absoluteURL,
               let data = await CDNContent.data(url.absoluteString, relativeTo: nil) else { return nil }
@@ -175,17 +175,19 @@ struct LoadedCharacter {
         do {
             rig = try JSONDecoder().decode(CharacterRig.self, from: data)
         } catch {
-            print("MascotKit: не удалось разобрать \(ref) — \(error)")
+            MascotLog.content.error("Не удалось разобрать персонажа \(ref, privacy: .public): \(String(describing: error), privacy: .public)")
             return nil
         }
         let files = await CDNContent.data(rig.imageRefs, relativeTo: url)
         var images: [String: UIImage] = [:]
         for imageRef in rig.imageRefs {
             guard let image = files[imageRef].flatMap({ UIImage(data: $0, scale: 3) }) else {
-                print("MascotKit: нет картинки \(imageRef) у \(ref)")
+                MascotLog.content.error("У персонажа \(ref, privacy: .public) не загрузилась картинка \(imageRef, privacy: .public) — персонаж не показывается")
                 return nil
             }
-            images[imageRef] = image
+            // PNG распаковывается в фоне сейчас, а не на главном потоке в момент первого кадра —
+            // иначе маскот «дёргается», когда появляется.
+            images[imageRef] = await image.byPreparingForDisplay() ?? image
         }
         return LoadedCharacter(rig: rig, images: images)
     }

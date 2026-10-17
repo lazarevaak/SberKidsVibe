@@ -15,7 +15,7 @@ final class SoundBank {
     private var lastPlayed: [String: TimeInterval] = [:]
     private var volume: Float = 0.6
 
-    func load(_ clips: [String: [String]], settings: PetSounds, relativeTo base: URL?) async {
+    func load(_ clips: [String: [String]], settings: MascotSoundSettings, relativeTo base: URL?) async {
         guard settings.enabled, !clips.isEmpty else { return }
         Self.prepareSession()
         volume = Float(min(max(settings.volume, 0), 1))
@@ -30,9 +30,12 @@ final class SoundBank {
             }
             if !list.isEmpty { players[key] = list }
         }
-        #if DEBUG
-        print("MascotKit: звуков загружено \(players.count) из \(clips.count)")
-        #endif
+        let missing = clips.keys.filter { players[$0] == nil }.sorted()
+        if missing.isEmpty {
+            MascotLog.content.info("Звуков загружено: \(self.players.count)")
+        } else {
+            MascotLog.content.warning("Не загрузились звуки для событий: \(missing.joined(separator: ", "), privacy: .public)")
+        }
     }
 
     /// - Parameters:

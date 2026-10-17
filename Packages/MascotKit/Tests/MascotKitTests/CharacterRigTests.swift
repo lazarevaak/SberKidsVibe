@@ -59,8 +59,8 @@ final class CharacterRigTests: XCTestCase {
 
     @MainActor
     func testCharacterSelection() throws {
-        func config(_ json: String) throws -> PetConfig {
-            try JSONDecoder().decode(PetConfig.self, from: Data(json.utf8))
+        func config(_ json: String) throws -> MascotConfig {
+            try JSONDecoder().decode(MascotConfig.self, from: Data(json.utf8))
         }
         let characters = """
           "characters": [

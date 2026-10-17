@@ -13,10 +13,10 @@ import UIKit
 
 // MARK: - Слой
 
-struct PetLayer: View {
+struct MascotLayerView: View {
     let isRunning: Bool
-    private let world = PetWorld.shared
-    @ObservedObject private var presence = PetWorld.shared.presence
+    private let world = MascotEngine.shared
+    @ObservedObject private var presence = MascotEngine.shared.presence
     @State private var dragStart: Date?
 
     var body: some View {
@@ -68,6 +68,8 @@ struct PetLayer: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .onGlobalFrameChange { world.overlayFrame = $0 }
+        .onAppear { world.setSensorsActive(isRunning) }
+        .onChange(of: isRunning) { world.setSensorsActive($0) }
     }
 
 
@@ -127,7 +129,7 @@ private struct SpriteMetrics {
 
 private struct SpeechBubble: View {
     let text: String
-    let style: PetBubbleStyle
+    let style: MascotBubbleStyle
 
     var body: some View {
         let size = CGFloat(style.fontSize)
@@ -141,7 +143,8 @@ private struct SpeechBubble: View {
             .padding(.horizontal, size * 0.75)
             .padding(.vertical, size * 0.42)
             .background(background)
-            .shadow(color: .black.opacity(0.08 + 0.06 * style.opacity), radius: 6, y: 2)
+            // Тень размывается заново каждый кадр, пока реплика едет за маскотом, — на слабых телефонах без неё.
+            .shadow(color: .black.opacity(DevicePerformance.isLite ? 0 : 0.08 + 0.06 * style.opacity), radius: 6, y: 2)
     }
 
     /// Полупрозрачный фон: размытие того, что под репликой, + цвет фона с заданной непрозрачностью.

@@ -88,7 +88,7 @@ enum CDNContent {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            print("CDN: не удалось разобрать \(file) — \(error)")
+            MascotLog.content.error("Не удалось разобрать \(file, privacy: .public): \(String(describing: error), privacy: .public)")
             return nil
         }
     }

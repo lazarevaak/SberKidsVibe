@@ -1,15 +1,15 @@
 //
-//  PetConfigTests.swift
+//  MascotConfigTests.swift
 //  MascotKitTests
 //
 
 import XCTest
 @testable import MascotKit
 
-final class PetConfigTests: XCTestCase {
+final class MascotConfigTests: XCTestCase {
     @MainActor
-    private func decode(_ json: String) throws -> PetConfig {
-        try JSONDecoder().decode(PetConfig.self, from: Data(json.utf8))
+    private func decode(_ json: String) throws -> MascotConfig {
+        try JSONDecoder().decode(MascotConfig.self, from: Data(json.utf8))
     }
 
     @MainActor

@@ -96,12 +96,12 @@ public enum Mascot {
 
     /// Событие приложения: пополнение, выполненное дело, достижение.
     public static func send(_ event: MascotEvent) {
-        PetWorld.shared.send(event)
+        MascotEngine.shared.send(event)
     }
 
     /// Любое действие маскота — например, позвать его из кода.
     public static func perform(_ action: MascotAction) {
-        PetWorld.shared.perform(action, from: nil)
+        MascotEngine.shared.perform(action, from: nil)
     }
 }
 
@@ -122,7 +122,7 @@ extension View {
 
     /// Домик маскота: сюда он уходит, отсюда выпрыгивает по событиям.
     public func mascotHome() -> some View {
-        onGlobalFrameChange { PetWorld.shared.setHome(frame: $0) }
+        onGlobalFrameChange { MascotEngine.shared.setHome(frame: $0) }
     }
 
     /// Триггер на вьюхе: жест → действие маскота.
@@ -143,18 +143,18 @@ private struct MascotRootModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onGlobalFrameChange { PetWorld.shared.contentFrame = $0 }
+            .onGlobalFrameChange { MascotEngine.shared.contentFrame = $0 }
             .overlay {
                 if !reduceMotion {
                     // Анимация стоит, когда приложение свёрнуто или экран закрыт другим.
-                    PetLayer(isRunning: isOnScreen && scenePhase == .active).ignoresSafeArea()
+                    MascotLayerView(isRunning: isOnScreen && scenePhase == .active).ignoresSafeArea()
                 }
             }
             .onAppear { isOnScreen = true }
             .onDisappear { isOnScreen = false }
-            .task { if !reduceMotion { await PetWorld.shared.start(configFile: configFile) } }
+            .task { if !reduceMotion { await MascotEngine.shared.start(configFile: configFile) } }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { PetWorld.shared.appearanceCheck() }
+                if phase == .active { MascotEngine.shared.appearanceCheck() }
             }
     }
 }
@@ -169,9 +169,9 @@ private struct MascotSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onGlobalFrameChange {
-                PetWorld.shared.setPlatform(id, frame: $0, occludesBelow: occludesBelow)
+                MascotEngine.shared.setPlatform(id, frame: $0, occludesBelow: occludesBelow)
             }
-            .onDisappear { PetWorld.shared.setPlatform(id, frame: nil) }
+            .onDisappear { MascotEngine.shared.setPlatform(id, frame: nil) }
     }
 }
 
@@ -180,8 +180,10 @@ private struct MascotTriggerModifier: ViewModifier {
     let gesture: MascotGesture
     let action: MascotAction
 
-    @State private var frame: CGRect?
-    @ObservedObject private var presence = PetWorld.shared.presence
+    /// Фрейм вьюхи. Хранится в объекте, а не в @State: при скролле он меняется каждый кадр,
+    /// и @State заставлял бы SwiftUI перерисовывать вьюху 60 раз в секунду впустую.
+    @State private var frameBox = FrameBox()
+    @ObservedObject private var presence = MascotEngine.shared.presence
 
     /// Код задаёт значения по умолчанию, CDN может их заменить.
     private var resolved: (enabled: Bool, gesture: MascotGesture, action: MascotAction) {
@@ -194,12 +196,12 @@ private struct MascotTriggerModifier: ViewModifier {
     func body(content: Content) -> some View {
         let trigger = resolved
         content
-            .onGlobalFrameChange { frame = $0 }
+            .onGlobalFrameChange { frameBox.frame = $0 }
             .simultaneousGesture(recognizer(for: trigger.gesture), including: trigger.enabled ? .all : .subviews)
     }
 
     private func recognizer(for gesture: MascotGesture) -> AnyGesture<Void> {
-        let fire = { PetWorld.shared.perform(resolved.action, from: frame) }
+        let fire = { MascotEngine.shared.perform(resolved.action, from: frameBox.frame) }
         switch gesture {
         case .tap(let count):
             return AnyGesture(TapGesture(count: count).onEnded { fire() })
@@ -207,4 +209,8 @@ private struct MascotTriggerModifier: ViewModifier {
             return AnyGesture(LongPressGesture(minimumDuration: duration).onEnded { _ in fire() }.map { _ in () })
         }
     }
+}
+
+private final class FrameBox {
+    var frame: CGRect?
 }

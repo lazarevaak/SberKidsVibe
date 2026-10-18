@@ -5,7 +5,6 @@
 
 import SwiftUI
 
-/// Звёздочки над головой, «z» во сне, искорки радости — общие для всех персонажей.
 struct MascotEffects: View {
     enum Effect: String { case none, stars, zzz, sparkles }
 

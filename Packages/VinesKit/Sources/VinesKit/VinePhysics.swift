@@ -78,8 +78,8 @@ nonisolated final class VinePhysics {
         let limit = 1800 * dt
         let first = vine.isAttached ? 1 : 0
         let profiles = vine.profiles
-        vine.previous.withUnsafeMutableBufferPointer { previous in
-            vine.points.withUnsafeMutableBufferPointer { points in
+        vine.previous.withUnsafeMutableBufferPointer { (previous: inout UnsafeMutableBufferPointer<CGPoint>) -> Void in
+            vine.points.withUnsafeMutableBufferPointer { (points: inout UnsafeMutableBufferPointer<CGPoint>) -> Void in
                 for i in first..<points.count {
                     let p = points[i]
                     // Медленнее теряем энергию, но ограничиваем скорость при повторных сильных рывках.
@@ -92,14 +92,14 @@ nonisolated final class VinePhysics {
                         dy *= scale
                     }
                     let profile = profiles[i]
-                    let wind = (windSin * profile.windCos + windCos * profile.windSin) * windScale * profile.depth
+                    let phase: CGFloat = windSin * profile.windCos + windCos * profile.windSin
+                    let wind: CGFloat = phase * windScale * profile.depth
                     // Разная фаза и масса украшений не дают всем нитям двигаться синхронно.
                     let response = profile.response
                     previous[i] = p
-                    points[i] = CGPoint(
-                        x: p.x + dx + (gravity.dx + motionForce.dx * response + wind * gravity.dy / 1500) * dtSquared,
-                        y: p.y + dy + (gravity.dy + motionForce.dy * response - wind * gravity.dx / 1500) * dtSquared
-                    )
+                    let forceX: CGFloat = gravity.dx + motionForce.dx * response + wind * gravity.dy / 1500
+                    let forceY: CGFloat = gravity.dy + motionForce.dy * response - wind * gravity.dx / 1500
+                    points[i] = CGPoint(x: p.x + dx + forceX * dtSquared, y: p.y + dy + forceY * dtSquared)
                 }
             }
         }

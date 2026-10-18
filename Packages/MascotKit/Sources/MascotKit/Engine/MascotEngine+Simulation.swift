@@ -2,14 +2,10 @@
 //  MascotEngine+Simulation.swift
 //  MascotKit
 //
-//  Один кадр жизни маскота: полёт, спуск, уход домой, стояние на карточке,
-//  приземление — и снимок для отрисовки.
-//
 
 import SwiftUI
 
 extension MascotEngine {
-    /// Продвигает симуляцию к текущему моменту и возвращает кадр; nil — маскота нет на экране.
     func step() -> MascotSnapshot? {
         let t = now
         let dt = CGFloat(min(t - (lastStep ?? t), MascotTuning.maxStep))
@@ -35,13 +31,11 @@ extension MascotEngine {
             walkPhase += Double(dt) * 16
         case .leaving:
             guard stepLeaving(t) else { return nil }
-        case .walking, .idle, .sitting, .waving, .sleeping, .dizzy, .dancing, .celebrating, .performing:
+        case .walking, .idle, .sitting, .waving, .sleeping, .dizzy, .dancing, .celebrating, .performing, .hiding:
             stepGrounded(dt, t)
         }
         return snapshot(t)
     }
-
-    // MARK: - Движение
 
     private func stepDescending(_ dt: CGFloat) {
         let fall = MascotTuning.descendSpeed * dt
@@ -51,13 +45,12 @@ extension MascotEngine {
         if let hit = landing(fromY: pos.y - fall, toY: pos.y) {
             land(on: hit.id, rect: hit.rect)
             isRopeRetracting = true
-        } else if pos.y >= floorY {
-            landOnFloor()
+        } else if pos.y >= bottomY {
             isRopeRetracting = true
+            bounceOffBottom()
         }
     }
 
-    /// - Returns: false, если улетел за экран и ушёл.
     private func stepAirborne(_ dt: CGFloat) -> Bool {
         let previous = pos
         vel.dx += gravity.dx * MascotTuning.tiltPushInAir * dt
@@ -68,7 +61,6 @@ extension MascotEngine {
         walkPhase += Double(dt) * 14
 
         if isThrown, pos.x < -60 || pos.x > screen.width + 60 || pos.y > screen.height + 80 {
-            // Вылетел за экран — обиделся и ушёл, вернётся позже.
             hide()
             return false
         }
@@ -79,14 +71,12 @@ extension MascotEngine {
         }
         if vel.dy > 0, let hit = landing(fromY: previous.y, toY: pos.y) {
             land(on: hit.id, rect: hit.rect)
-        } else if pos.y >= floorY, pos.x > 0, pos.x < screen.width {
-            landOnFloor()
+        } else if !isThrown, pos.y >= bottomY {
+            bounceOffBottom()
         }
         return true
     }
 
-    /// Прыжок по дуге в домик с уменьшением в конце.
-    /// - Returns: false, если уже скрылся в домике.
     private func stepLeaving(_ t: TimeInterval) -> Bool {
         guard let leave else { hide(); return false }
         let u = min(1, (t - leave.start) / MascotTuning.leaveDuration)
@@ -104,12 +94,10 @@ extension MascotEngine {
 
     private func stepGrounded(_ dt: CGFloat, _ t: TimeInterval) {
         guard let rect = currentSurface() else {
-            // Карточка уехала при скролле — падаем.
             vel = CGVector(dx: facing * 60, dy: 0)
             setMode(.airborne)
             return
         }
-        // Карточка скакнула за один кадр (перестройка экрана, а не скролл) — не телепортируемся вместе с ней.
         if let last = lastSurfaceRect, abs(rect.minY - last.minY) > 90 || abs(rect.minX - last.minX) > 90 {
             dropFromCurrentPlace()
             return
@@ -127,7 +115,6 @@ extension MascotEngine {
             if platformOffset < 0 || platformOffset > rect.width {
                 platformOffset = min(max(platformOffset, 0), rect.width)
                 if Double.random(in: 0..<1) < MascotTuning.edgeJumpChance {
-                    // Спрыгивает с края карточки вниз.
                     vel = CGVector(dx: facing * MascotTuning.edgeJump.dx, dy: MascotTuning.edgeJump.dy)
                     setMode(.airborne)
                     return
@@ -138,6 +125,8 @@ extension MascotEngine {
             react("snore", gain: 0.6)
         case .dizzy where t - modeStart > 0.5:
             react("dizzy", gain: 0.7)
+        case .hiding:
+            facing = Int((t - modeStart) / MascotTuning.peekLookInterval).isMultiple(of: 2) ? 1 : -1
         case .performing:
             walkPhase += Double(dt) * 10
         case .dancing, .celebrating:
@@ -151,12 +140,11 @@ extension MascotEngine {
         if t - lastInteraction > config.stayMinutes * 60, mode != .sleeping { goHome() }
     }
 
-    /// Сильный наклон телефона: скользит к краю карточки и может сорваться.
-    /// - Returns: true, если скользит — остальное поведение в этом кадре не играет.
     private func slideOnTilt(_ dt: CGFloat, _ t: TimeInterval, along rect: CGRect) -> Bool {
         let tilt = gravity.dx
         guard abs(tilt) > MascotTuning.tiltThreshold,
               mode != .sleeping || abs(tilt) > MascotTuning.strongTilt else { return false }
+        if mode == .hiding { setMode(.idle, duration: MascotTuning.idleDuration) }
         platformOffset += tilt * MascotTuning.slideSpeed * dt
         facing = tilt > 0 ? 1 : -1
         walkPhase += Double(dt) * 12
@@ -169,8 +157,6 @@ extension MascotEngine {
         return true
     }
 
-    // MARK: - Приземление
-
     func land(on id: String, rect: CGRect) {
         lastSurfaceRect = nil
         platformID = id
@@ -179,12 +165,13 @@ extension MascotEngine {
         afterLanding()
     }
 
-    func landOnFloor() {
+    private func bounceOffBottom() {
+        pos.y = bottomY
+        platformID = nil
         lastSurfaceRect = nil
-        platformID = Self.floorID
-        pos.y = floorY
-        platformOffset = pos.x - 12
-        afterLanding()
+        spin = 0; spinSpeed = 0
+        guard !surfaces.isEmpty else { goHome(); return }
+        hop(nearest: true)
     }
 
     private func afterLanding() {
@@ -202,7 +189,6 @@ extension MascotEngine {
             haptics.medium.impactOccurred()
             return
         }
-        // Мягкое приземление — тише, чем прыжок с высоты.
         react("land", gain: Float(min(max(impact / 1200, 0.35), 1)))
         if let name = pendingAnimation {
             pendingAnimation = nil
@@ -215,8 +201,6 @@ extension MascotEngine {
         }
     }
 
-    /// Экран поменял размер (поворот, Split View): старые координаты карточек больше не верны.
-    /// Маскот отцепляется и падает с текущего места — приземлится уже на свежие.
     private func screenDidResize() {
         platformMotion.removeAll()
         switch mode {
@@ -231,13 +215,11 @@ extension MascotEngine {
         rope = nil
         isRopeRetracting = false
         pos.x = min(max(pos.x, 16), max(screen.width - 16, 16))
-        pos.y = min(max(pos.y, safeTop), floorY - 1)
+        pos.y = min(max(pos.y, safeTop), bottomY - 1)
         vel = CGVector(dx: 0, dy: -120)
         platformID = nil
         setMode(.airborne)
     }
-
-    // MARK: - Состояние
 
     func setMode(_ newMode: MascotMode, duration: TimeInterval = 0) {
         if newMode == .celebrating, mode != .celebrating { react("celebrate") }
@@ -249,8 +231,8 @@ extension MascotEngine {
     func hide() {
         setMode(.hidden)
         bubble = nil
+        holdStart = nil
         rope = nil
-        // hide() зовётся во время отрисовки кадра — меняем наблюдаемое состояние уже после неё.
         Task { @MainActor in
             self.presence.isVisible = false
             self.updateMotion()
@@ -264,7 +246,15 @@ extension MascotEngine {
         if rope == nil { isRopeRetracting = false }
     }
 
-    // MARK: - Кадр для отрисовки
+    private func hideDepth(_ t: TimeInterval) -> CGFloat {
+        guard mode == .hiding, let rig = character?.rig else { return 0 }
+        let u = t - modeStart
+        let progress = CGFloat(min(max(min(u, modeDuration - u) / MascotTuning.hideDive, 0), 1))
+        let eased = progress * progress * (3 - 2 * progress)
+        let height = (rig.footPoint.y - rig.headPoint.y) * spriteScale
+        let fidget = CGFloat(sin(u * 2.4)) * 1.5 * eased
+        return max(height * (1 - MascotTuning.peekVisible) * eased + fidget, 0)
+    }
 
     private func snapshot(_ t: TimeInterval) -> MascotSnapshot {
         var expression: MascotExpression
@@ -282,9 +272,12 @@ extension MascotEngine {
         }
         if let override = expressionOverride, override.until > t { expression = override.expression }
 
+        let animation = mode == .performing ? performing : nil
+        let mirrored = animation.flatMap { character?.rig.animations[$0]?.mirror } ?? true
+
         return MascotSnapshot(
             position: pos,
-            facing: facing,
+            facing: mirrored ? facing : 1,
             mode: mode,
             expression: expression,
             walkPhase: walkPhase,
@@ -292,10 +285,12 @@ extension MascotEngine {
             spin: spin,
             scale: scale,
             rope: rope,
-            bubble: bubble.flatMap { $0.until > t ? $0.text : nil },
+            bubble: bubble.flatMap { $0.until > t || isBeingRead($0) ? $0.text : nil },
+            sink: hideDepth(t),
+            bubbleExpanded: isHolding,
             blink: t.truncatingRemainder(dividingBy: 3.4) < 0.12,
             time: t,
-            animation: mode == .performing ? performing : nil,
+            animation: animation,
             modeTime: t - modeStart
         )
     }

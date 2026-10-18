@@ -2,9 +2,6 @@
 //  VisitLimiter.swift
 //  MascotKit
 //
-//  Лимиты реакций и реплик за один визит маскота (пока он на экране).
-//  Сбрасывается, когда маскот ушёл и его позвали снова.
-//
 
 import Foundation
 
@@ -13,16 +10,12 @@ struct VisitLimiter {
 
     mutating func reset() { counts = [:] }
 
-    /// Можно ли сработать реакции ещё раз за этот визит. Если да — засчитывает срабатывание.
     mutating func allow(_ key: String, _ reaction: MascotReaction) -> Bool {
         if let limit = reaction.maxPerVisit, counts[key, default: 0] >= limit { return false }
         counts[key, default: 0] += 1
         return true
     }
 
-    /// Какую реплику сказать: сначала гарантированные (first), пока не исчерпан их лимит за визит,
-    /// иначе — случайная из обычных с вероятностью sayChance.
-    /// - Parameter roll: случайное число 0…1 (подменяется в тестах).
     mutating func pickLine(for key: String,
                            in reaction: MascotReaction,
                            roll: () -> Double = { .random(in: 0..<1) }) -> (line: MascotLine, guaranteed: Bool)? {

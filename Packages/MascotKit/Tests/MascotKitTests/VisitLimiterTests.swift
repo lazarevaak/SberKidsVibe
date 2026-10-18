@@ -16,8 +16,6 @@ final class VisitLimiterTests: XCTestCase {
         return try JSONDecoder().decode(MascotReaction.self, from: Data(json.utf8))
     }
 
-    /// Сценарий из ТЗ: гарантированная реплика звучит 3 раза за визит, потом — обычные,
-    /// а после нового визита снова гарантированная.
     @MainActor
     func testGuaranteedLineThreeTimesPerVisitThenResets() throws {
         let reaction = try tapReaction()
@@ -33,7 +31,7 @@ final class VisitLimiterTests: XCTestCase {
         XCTAssertEqual(fourth.line.text, "Хи-хи!")
         XCTAssertFalse(fourth.guaranteed)
 
-        limiter.reset()   // ушёл и позвали снова
+        limiter.reset()
         XCTAssertEqual(say(&limiter)?.line.text, "А ты видел новую цель в Копилках?")
     }
 

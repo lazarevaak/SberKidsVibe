@@ -2,9 +2,6 @@
 //  RigSprite.swift
 //  MascotKit
 //
-//  Рисует персонажа из деталей по CharacterRig. Код ничего не знает о том,
-//  кто перед ним — обезьянка или машинка: всё берёт из character.json.
-//
 
 import SwiftUI
 import UIKit
@@ -12,13 +9,11 @@ import UIKit
 struct RigSprite: View {
     let s: MascotSnapshot
     let character: LoadedCharacter
-    /// Шапка из сезонного костюма: подменяет деталь "hat".
     let hat: UIImage?
     let hideHat: Bool
 
     private var rig: CharacterRig { character.rig }
 
-    /// Имя состояния в character.json.
     private var state: String {
         if let animation = s.animation { return animation }
         return switch s.mode {
@@ -33,11 +28,11 @@ struct RigSprite: View {
         case .airborne, .leaving: "air"
         case .dizzy: "dizzy"
         case .descending: "descend"
+        case .hiding: "hide"
         case .performing, .hidden: "idle"
         }
     }
 
-    /// «Часы» колебаний: в движении — шаги (ноги в такт ходьбе), в покое — время.
     private var clock: Double {
         switch s.mode {
         case .walking, .airborne, .grabbed, .dancing, .celebrating, .descending, .leaving, .performing: s.walkPhase
@@ -45,7 +40,6 @@ struct RigSprite: View {
         }
     }
 
-    /// Ключ картинки эмоции в character.json → images; у обычного лица бывает моргание.
     private var expressionKey: String {
         s.expression == .normal && s.blink ? "blink" : s.expression.rawValue
     }
@@ -85,11 +79,8 @@ struct RigSprite: View {
             MascotEffects(effect: effect, time: s.time, head: rig.headPoint, center: CGPoint(x: rig.size.width / 2, y: rig.size.height / 2))
         }
         .frame(width: rig.size.width, height: rig.size.height)
-        // Своя анимация двигает персонажа целиком: вращение, подпрыгивания, покачивание.
         .rotationEffect(.degrees(wholeBody.angle))
         .offset(x: wholeBody.dx, y: wholeBody.dy)
-        // Не растрируем весь спрайт: первый drawingGroup создаёт Metal pipeline
-        // синхронно и может подвесить главный поток при первом появлении маскота.
         .scaleEffect(x: s.facing * (1 + s.squash), y: 1 - s.squash, anchor: footAnchor)
         .rotationEffect(.degrees(s.spin))
         .scaleEffect(s.scale, anchor: footAnchor)
@@ -97,7 +88,7 @@ struct RigSprite: View {
 
     @ViewBuilder
     private func part(_ part: RigPart) -> some View {
-        let motion = part.motion(for: state)
+        let motion = part.motion(for: state, orElse: s.mode == .hiding ? "idle" : nil)
         if motion?.hidden != true, let image = image(for: part, motion: motion) {
             let pose = self.pose(of: part, motion: motion)
             PartImage(image: image, fit: part.fit)
@@ -115,7 +106,6 @@ struct RigSprite: View {
         var center: CGPoint
     }
 
-    /// Поза детали в этом кадре: постоянный поворот и сдвиг + колебания по «часам» + вращение.
     private func pose(of part: RigPart, motion: RigMotion?) -> Pose {
         let frequency = motion?.freq ?? 1
         let phase = (motion?.phase ?? 0) * 2 * Double.pi
@@ -135,7 +125,6 @@ struct RigSprite: View {
                     center: center)
     }
 
-    /// Картинка детали: картинка состояния → картинка эмоции → обычная. Шапку может подменить костюм.
     private func image(for part: RigPart, motion: RigMotion?) -> UIImage? {
         if part.id == "hat" {
             if hideHat { return nil }

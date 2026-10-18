@@ -2,12 +2,6 @@
 //  CDNContent.swift
 //  MascotKit
 //
-//  Загрузка контента с CDN:
-//    1. CDN (свежий, с таймаутом) → сохраняется в кэш;
-//    2. кэш с прошлого удачного запуска — если сети нет.
-//  Ничего не зашито в приложение: нет ни CDN, ни кэша — прикол просто не показывается.
-//  Картинки и звуки кэшируются на диск навсегда по адресу.
-//
 
 import SwiftUI
 import UIKit
@@ -16,9 +10,6 @@ import UIKit
 enum CDNContent {
     private static var configuredBaseURL: URL?
 
-    /// Папка с контентом на CDN. Приложение задаёт её через публичное contentURL.
-    /// Для демо можно переопределить аргументом запуска `-CDNBaseURL https://…/cdn/`
-    /// (или file:///…/cdn/ в симуляторе).
     static var baseURL: URL? {
         get {
             if let override = UserDefaults.standard.string(forKey: "CDNBaseURL") { return URL(string: override) }
@@ -34,7 +25,6 @@ enum CDNContent {
         return dir
     }
 
-    /// Загружает и декодирует конфиг. Возвращает его и адрес, от которого считать относительные пути картинок.
     static func load<T: Decodable>(_ type: T.Type, file: String) async -> (T, URL?)? {
         let cached = cacheDirectory.appendingPathComponent(file)
         let source = cacheDirectory.appendingPathComponent(file + ".source")
@@ -52,16 +42,13 @@ enum CDNContent {
         return nil
     }
 
-    /// "asset:имя" — из Assets.xcassets; иначе абсолютный URL или путь относительно конфига.
     static func image(_ ref: String, relativeTo base: URL?) async -> UIImage? {
         if ref.hasPrefix("asset:") { return UIImage(named: String(ref.dropFirst(6))) }
         return await data(ref, relativeTo: base).flatMap { UIImage(data: $0, scale: 3) }
     }
 
-    /// Любой файл (картинка, звук): абсолютный URL или путь относительно конфига. Кэшируется на диск навсегда.
     static func data(_ ref: String, relativeTo base: URL?) async -> Data? {
         guard let url = URL(string: ref, relativeTo: base)?.absoluteURL else { return nil }
-        // Файлы из бандла и локальные — читаем напрямую, кэшировать их незачем.
         if url.isFileURL { return try? Data(contentsOf: url) }
         let file = cacheDirectory.appendingPathComponent(cacheName(for: url))
         if let data = try? Data(contentsOf: file) { return data }
@@ -70,7 +57,6 @@ enum CDNContent {
         return data
     }
 
-    /// Несколько файлов сразу — параллельно, а не по одному: на мобильной сети это в разы быстрее.
     static func data(_ refs: Set<String>, relativeTo base: URL?) async -> [String: Data] {
         await withTaskGroup(of: (String, Data?).self) { group in
             for ref in refs {
@@ -106,7 +92,6 @@ enum CDNContent {
     }
 }
 
-/// Сезон в формате "MM-dd", повторяется каждый год; может переходить через Новый год.
 enum Season {
     static func isActive(from: String?, to: String?, on date: Date = .now) -> Bool {
         guard let start = monthDay(from), let end = monthDay(to) else { return from == nil && to == nil }
@@ -122,7 +107,6 @@ enum Season {
 }
 
 extension KeyedDecodingContainer {
-    /// decodeIfPresent со значением по умолчанию — чтобы в JSON можно было писать только нужные поля.
     func value<T: Decodable>(_ key: Key, default value: T) throws -> T {
         try decodeIfPresent(T.self, forKey: key) ?? value
     }

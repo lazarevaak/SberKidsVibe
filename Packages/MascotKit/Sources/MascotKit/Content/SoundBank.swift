@@ -2,10 +2,6 @@
 //  SoundBank.swift
 //  MascotKit
 //
-//  Короткие звуки маскота. Файлы приходят с CDN и кэшируются, проигрыватели
-//  создаются один раз при загрузке. Звук всегда — ответ на действие, сам не играет.
-//  Уважает беззвучный режим и не прерывает музыку, которую слушает пользователь.
-//
 
 import AVFoundation
 import QuartzCore
@@ -38,9 +34,6 @@ final class SoundBank {
         }
     }
 
-    /// - Parameters:
-    ///   - gain: громкость относительно общей (например, тише для мягкого приземления).
-    ///   - minInterval: не повторять этот звук чаще — чтобы не было «пулемёта».
     func play(_ key: String, gain: Float = 1, minInterval: TimeInterval = 0.12) {
         guard let player = players[key]?.randomElement() else { return }
         let now = CACurrentMediaTime()
@@ -51,8 +44,6 @@ final class SoundBank {
         player.play()
     }
 
-    /// Если приложение само не настраивало звук (категория по умолчанию), включаем .ambient:
-    /// молчит в беззвучном режиме и смешивается с музыкой. Настройки приложения не трогаем.
     private static func prepareSession() {
         let session = AVAudioSession.sharedInstance()
         guard session.category == .soloAmbient else { return }

@@ -2,27 +2,22 @@
 //  MascotEngine+Behavior.swift
 //  MascotKit
 //
-//  Что маскот делает сам (поведение по весам), как отвечает на события
-//  (реакции из конфига) и как играет анимации — встроенные и свои из character.json.
-//
 
 import SwiftUI
 
 extension MascotEngine {
-    // MARK: - Поведение по весам
+    static let hideBehavior = "hide"
 
     var isNight: Bool {
         let hour = Calendar.current.component(.hour, from: .now)
         return hour >= MascotTuning.nightHours.from || hour < MascotTuning.nightHours.to
     }
 
-    /// Следующее занятие, случайно по весам из behaviors.
     func nextBehavior() {
         var weights = config.behaviors
         if isNight { weights["sleep", default: 0] *= config.nightSleepBoost }
         if surfaces.count < 2 { weights[BuiltInAnimation.hop.rawValue] = 0 }
-        // Своя анимация не повторяется сразу после себя — даже если в конфиге ей одной дали вес,
-        // персонаж не «залипнет» в ней, а между повторами постоит спокойно.
+        if platformID.map(canHide) != true { weights[Self.hideBehavior] = 0 }
         if mode == .performing, let last = performing { weights[last] = 0 }
 
         let total = weights.values.reduce(0) { $0 + max($1, 0) }
@@ -36,13 +31,19 @@ extension MascotEngine {
             setMode(.walking, duration: MascotTuning.walkDuration)
         case "idle":
             setMode(.idle, duration: MascotTuning.idleDuration)
+        case Self.hideBehavior:
+            setMode(.hiding, duration: MascotTuning.hideDuration)
+            react("hide")
         default:
-            // Встроенная поза или своя анимация персонажа; неизвестное имя — просто постоит.
             if !animate(pick, byUser: false) { setMode(.idle, duration: MascotTuning.idleDuration) }
+            if mode == .performing, performing == pick {
+                reactionDepth += 1
+                react(pick)
+                reactionDepth -= 1
+            }
         }
     }
 
-    /// Прыжок по дуге на другую карточку: случайную или ближайшую (когда выпрыгивает из вьюхи).
     func hop(nearest: Bool = false) {
         let options = surfaces.filter { $0.id != platformID }
         let distance = { (rect: CGRect) in hypot(rect.midX - self.pos.x, rect.minY - self.pos.y) }
@@ -60,7 +61,6 @@ extension MascotEngine {
         react("hop", gain: 0.7)
     }
 
-    /// Уходит в домик; если домик не виден — убегает за край экрана.
     func goHome() {
         react("bye")
         if let home = homeFrame.map(local), home.maxY > 0 {
@@ -74,10 +74,6 @@ extension MascotEngine {
         }
     }
 
-    // MARK: - Реакции
-
-    /// Реакция на любое событие из конфига: реплика, звук и анимация (встроенная или своя).
-    /// - Parameter gain: громкость звука относительно реакции (тише для мягкого приземления).
     func react(_ key: String, gain: Float = 1) {
         guard let reaction = config.reactions[key] else { return }
         let t = now
@@ -86,7 +82,6 @@ extension MascotEngine {
         lastReacted[key] = t
 
         if let (line, guaranteed) = limiter.pickLine(for: key, in: reaction) {
-            // Гарантированную реплику, пока она висит, обычные не перебивают.
             let isPinnedNow = bubble.map { $0.pinned && $0.until > t } ?? false
             if guaranteed || !isPinnedNow {
                 let standard = config.bubble.duration
@@ -96,23 +91,21 @@ extension MascotEngine {
         if reaction.sound?.isEmpty == false, Double.random(in: 0..<1) < (reaction.soundChance ?? 1) {
             sounds.play(key, gain: gain * Float(reaction.volume ?? 1))
         }
-        if let name = reaction.animation, reactionDepth == 0 {
+        if let name = playableAnimation(reaction), reactionDepth == 0 {
             reactionDepth += 1
             animate(name, byUser: true)
             reactionDepth -= 1
         }
     }
 
-    // MARK: - Анимации
+    func playableAnimation(_ reaction: MascotReaction?) -> String? {
+        reaction?.animation?.first(where: canAnimate)
+    }
 
-    /// Есть ли анимация с таким именем — встроенная или у текущего персонажа.
     func canAnimate(_ name: String) -> Bool {
         BuiltInAnimation(rawValue: name) != nil || character?.rig.animations[name] != nil
     }
 
-    /// Играет анимацию по имени. Если он ещё в воздухе или только появляется — сыграет после приземления.
-    /// - Parameter byUser: ответ на действие или событие — тогда это внимание, и домой он уйдёт не скоро.
-    /// - Returns: false, если анимации с таким именем нет.
     @discardableResult
     func animate(_ name: String, byUser: Bool) -> Bool {
         guard mode.isGrounded else {

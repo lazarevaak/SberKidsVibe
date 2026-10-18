@@ -2,19 +2,6 @@
 //  MascotEngine.swift
 //  MascotKit
 //
-//  Движок маскота: живёт поверх экрана, ходит по верхним краям карточек, прыгает между ними,
-//  реагирует на наклон, тряску, зарядку и события приложения; его можно схватить и кинуть.
-//
-//  Устроен по файлам:
-//    MascotEngine.swift             — состояние, запуск, появление, триггеры, касания;
-//    MascotEngine+Simulation.swift  — кадр: физика, приземление, снимок для отрисовки;
-//    MascotEngine+Behavior.swift    — поведение по весам, реакции, анимации, уход домой;
-//    MascotEngine+Geometry.swift    — карточки, по которым он ходит, и экран;
-//    MascotEngine+Sensors.swift     — датчик движения, зарядка, вибрация.
-//
-//  Все координаты внутри — в системе оверлея (весь экран, включая safe area).
-//  Публичный API — в Mascot.swift.
-//
 
 import SwiftUI
 import UIKit
@@ -26,34 +13,22 @@ final class MascotEngine {
 
     let presence = MascotPresence()
 
-    // MARK: Контент с CDN
-
     private(set) var config = MascotConfig()
     private(set) var skin: MascotSkin?
     private(set) var hat: UIImage?
-    /// Персонаж из деталей. Пока его нет, маскот не появляется.
     private(set) var character: LoadedCharacter?
-    /// Во сколько раз маскот меньше нарисованного: из конфига, у персонажа может быть свой.
     private(set) var spriteScale: CGFloat = 0.75
     let sounds = SoundBank()
-
-    // MARK: Экран и карточки (глобальные координаты)
 
     var overlayFrame: CGRect = .zero
     var contentFrame: CGRect = .zero
     var platforms: [String: CGRect] = [:]
-    /// Поверхности, которые перекрывают всё, что под ними (например, таб-бар).
     var occluders: Set<String> = []
+    var hideSpots: Set<String> = []
     var homeFrame: CGRect?
-    /// iOS 15: скорость карточек, чтобы досчитывать их положение (см. Geometry).
     var platformMotion: [String: (velocity: CGVector, reportedAt: TimeInterval)] = [:]
-    /// Размер экрана в прошлом кадре — чтобы заметить поворот.
     var lastScreenSize: CGSize = .zero
-    /// Где была карточка под маскотом в прошлом кадре — чтобы заметить «телепорт».
     var lastSurfaceRect: CGRect?
-
-    // MARK: Состояние маскота
-    // Не private: его меняют расширения движка в соседних файлах.
 
     var mode: MascotMode = .hidden
     var pos = CGPoint.zero
@@ -77,37 +52,23 @@ final class MascotEngine {
     var lastInteraction: TimeInterval = 0
     var lastStep: TimeInterval?
     var grabOffset = CGVector.zero
-
-    // MARK: Реплики и анимации
+    var holdStart: TimeInterval?
 
     var bubble: (text: String, until: TimeInterval, pinned: Bool)?
-    /// Лимиты реакций и реплик за текущий визит.
     var limiter = VisitLimiter()
     var lastReacted: [String: TimeInterval] = [:]
-    /// Анимация из реакции, которую надо сыграть, как только он встанет на карточку.
     var pendingAnimation: String?
-    /// Своя анимация, которая играет сейчас.
     var performing: String?
-    /// Глубина вложенных реакций: анимация, вызванная из реакции, сама анимаций не запускает —
-    /// так не бывает петель вроде «прыгнул → анимация прыжка → прыгнул…».
     var reactionDepth = 0
 
-    // MARK: Датчики
-
     let motion = CMMotionManager()
-    /// Сила тяжести в координатах экрана: x — наклон влево-вправо, y > 0 — телефон вверх ногами.
     var gravity = CGVector(dx: 0, dy: -1)
     var lastShake: TimeInterval = 0
     let haptics = Haptics()
     var sensorsStarted = false
-    /// Экран с маскотом виден и приложение активно — только тогда работают датчики.
     var sensorsAllowed = true
 
-    // MARK: Запуск
-
     private var didStart = false
-    /// Конфиг, персонаж и экран готовы. До этого маскот не появляется ни по какому поводу —
-    /// иначе он успел бы прийти со встроенными значениями, а не с теми, что пришли с CDN.
     private(set) var isReady = false
 
     var now: TimeInterval { CACurrentMediaTime() }
@@ -116,7 +77,6 @@ final class MascotEngine {
         guard !didStart else { return }
         didStart = true
 
-        // Всё — только с CDN или из кэша. Нет конфига или персонажа — маскота нет.
         guard let (config, base) = await CDNContent.load(MascotConfig.self, file: configFile), config.enabled else { return }
         self.config = config
         presence.triggerOverrides = config.triggers
@@ -132,7 +92,6 @@ final class MascotEngine {
         spriteScale = CGFloat(min(max(ref.scale ?? config.scale, 0.3), 2))
         skin = config.skin()
         if let hatRef = skin?.hat, hatRef != "none" { hat = await CDNContent.image(hatRef, relativeTo: base) }
-        // Звуки грузятся параллельно и не задерживают появление маскота.
         let clips = config.soundClips, settings = config.sounds
         Task { await sounds.load(clips, settings: settings, relativeTo: base) }
 
@@ -142,9 +101,6 @@ final class MascotEngine {
         appearanceCheck()
     }
 
-    // MARK: Появление
-
-    /// Появление при открытии: первый вход за день или случайный шанс из конфига.
     func appearanceCheck() {
         guard isReady, config.enabled, mode == .hidden else { return }
         let today = Date.now.formatted(.iso8601.year().month().day())
@@ -159,11 +115,8 @@ final class MascotEngine {
     }
 
     enum Entrance {
-        /// Спускается на ниточке сверху.
         case rope
-        /// Падает сверху, кувыркаясь (тряска).
         case drop
-        /// Выпрыгивает из вьюхи (глобальный фрейм); nil — из домика.
         case from(CGRect?)
     }
 
@@ -174,12 +127,10 @@ final class MascotEngine {
         lastInteraction = now
         presence.isVisible = true
         updateMotion()
-        // Новый визит — лимиты реплик начинаются заново.
         limiter.reset()
 
         switch entrance {
         case .rope:
-            // Над случайной карточкой в верхней части экрана.
             let target = surfaces.filter { $0.rect.minY < screen.height * 0.6 }.randomElement() ?? surfaces.randomElement()
             let x = target.map { CGFloat.random(in: $0.rect.minX...$0.rect.maxX) } ?? screen.width / 2
             pos = CGPoint(x: x, y: -10)
@@ -203,9 +154,6 @@ final class MascotEngine {
         if let greeting { react(greeting) }
     }
 
-    // MARK: Триггеры и события
-
-    /// Действие от триггера на вьюхе. frame — глобальный фрейм вьюхи, из неё маскот и выпрыгнет.
     func perform(_ action: MascotAction, from frame: CGRect?) {
         guard isReady, config.enabled else { return }
         haptics.medium.impactOccurred()
@@ -255,11 +203,28 @@ final class MascotEngine {
         react("charging")
     }
 
-    // MARK: Касания
-
     func touchBegan(at global: CGPoint) {
         let p = local(global)
         grabOffset = CGVector(dx: pos.x - p.x, dy: pos.y - p.y)
+        holdStart = now
+    }
+
+    var isHolding: Bool {
+        guard let holdStart else { return false }
+        let held = now - holdStart
+        return held > MascotTuning.holdToRead && held < MascotTuning.maxHold
+    }
+
+    func isBeingRead(_ bubble: (text: String, until: TimeInterval, pinned: Bool)) -> Bool {
+        guard isHolding, let holdStart else { return false }
+        return holdStart < bubble.until
+    }
+
+    func touchEnded() {
+        if let current = bubble, isBeingRead(current), config.bubble.isTruncated(current.text) {
+            bubble?.until = max(current.until, now + MascotTuning.readAfterHold)
+        }
+        holdStart = nil
     }
 
     func dragged(to global: CGPoint) {
@@ -269,6 +234,7 @@ final class MascotEngine {
             react("grab")
             haptics.light.impactOccurred()
         }
+        holdStart = nil
         let p = local(global)
         pos = CGPoint(x: p.x + grabOffset.dx, y: p.y + grabOffset.dy)
         lastInteraction = now
@@ -288,8 +254,12 @@ final class MascotEngine {
 
     func tapped() {
         guard mode.isGrounded else { return }
-        if let name = config.reactions["tap"]?.animation, canAnimate(name) {
-            // В конфиге на тап задана анимация — делает её вместо прыжка.
+        if mode == .hiding {
+            vel = CGVector(dx: 0, dy: -MascotTuning.tapJump * 1.15)
+            expressionOverride = (.happy, now + 1.5)
+            setMode(.airborne)
+            react("found")
+        } else if playableAnimation(config.reactions["tap"]) != nil {
             react("tap")
         } else {
             vel = CGVector(dx: 0, dy: -MascotTuning.tapJump)

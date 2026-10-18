@@ -30,7 +30,6 @@ final class CharacterRigTests: XCTestCase {
         XCTAssertEqual(rig.parts[0].motion(for: "walk")?.bob, 1)
         XCTAssertEqual(rig.parts[0].motion(for: "sleep")?.dy, 2, "нет своего состояния — берётся default")
 
-        // Деталь без картинки (шапка, которую подставит костюм) не требует файла.
         XCTAssertEqual(rig.imageRefs, ["body.png", "eyes_normal.png", "eyes_happy.png"])
     }
 

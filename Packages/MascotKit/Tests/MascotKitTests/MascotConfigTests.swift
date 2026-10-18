@@ -13,6 +13,26 @@ final class MascotConfigTests: XCTestCase {
     }
 
     @MainActor
+    func testBubbleTruncatesLongLinesUntilExpanded() throws {
+        let style = try decode(#"{ "bubble": { "maxChars": 10 } }"#).bubble
+        XCTAssertEqual(style.display("Хи-хи!", expanded: false), "Хи-хи!")
+        XCTAssertEqual(style.display("А ты видел новую цель?", expanded: false), "А ты видел…")
+        XCTAssertEqual(style.display("А ты видел новую цель?", expanded: true), "А ты видел новую цель?")
+        XCTAssertEqual(MascotConfig().bubble.display("А ты видел новую цель?", expanded: false), "А ты видел новую цель?")
+    }
+
+    @MainActor
+    func testHideSpotsFromConfigOverrideCode() throws {
+        XCTAssertTrue(MascotConfig().allowsHiding(behind: "promo", markedInCode: true))
+        XCTAssertFalse(MascotConfig().allowsHiding(behind: "promo", markedInCode: false))
+
+        let config = try decode(#"{ "hideSpots": ["balance", "action-*"] }"#)
+        XCTAssertTrue(config.allowsHiding(behind: "balance", markedInCode: false))
+        XCTAssertTrue(config.allowsHiding(behind: "action-Копилка", markedInCode: false))
+        XCTAssertFalse(config.allowsHiding(behind: "promo", markedInCode: true))
+    }
+
+    @MainActor
     func testLineDecodesFromStringAndObject() throws {
         let config = try decode("""
         { "reactions": { "tap": { "say": [
@@ -35,7 +55,6 @@ final class MascotConfigTests: XCTestCase {
         { "reactions": { "tilt": { "sound": ["slide.wav"] } } }
         """)
         let tilt = try XCTUnwrap(config.reactions["tilt"])
-        // Звук добавился, техническая пауза из кода осталась; реплик в коде нет.
         XCTAssertEqual(tilt.sound, ["slide.wav"])
         XCTAssertNil(tilt.say)
         XCTAssertEqual(tilt.cooldown, 4)
@@ -68,9 +87,15 @@ final class MascotConfigTests: XCTestCase {
         let config = try decode("""
         { "reactions": { "secret": { "say": ["Тайник!"], "animation": "dance" } } }
         """)
-        XCTAssertEqual(config.reactions["secret"]?.animation, "dance")
+        XCTAssertEqual(config.reactions["secret"]?.animation, ["dance"])
         XCTAssertEqual(MascotAction("react:secret"), .react("secret"))
         XCTAssertEqual(MascotAction("say:secret"), .react("secret"))
+    }
+
+    @MainActor
+    func testReactionAnimationCanBeAList() throws {
+        let config = try decode(#"{ "reactions": { "tap": { "animation": ["sixSeven", "party"] } } }"#)
+        XCTAssertEqual(config.reactions["tap"]?.animation, ["sixSeven", "party"])
     }
 
     @MainActor
@@ -86,7 +111,6 @@ final class MascotConfigTests: XCTestCase {
         XCTAssertEqual(custom.bubble.opacity, 0.5)
         XCTAssertFalse(custom.bubble.blur)
 
-        // Опечатка в конфиге не должна закрыть пол-экрана.
         let wild = try decode(#"{ "bubble": { "fontSize": 80, "maxWidth": 5000, "maxLines": 0 } }"#)
         XCTAssertEqual(wild.bubble.fontSize, 24)
         XCTAssertEqual(wild.bubble.maxWidth, 320)
@@ -101,7 +125,6 @@ final class MascotConfigTests: XCTestCase {
     func testNoContentIsBuiltIn() throws {
         let config = try decode("{}")
         XCTAssertTrue(config.enabled)
-        // Весь контент — только из конфига: в коде нет ни реплик, ни звуков, ни персонажей.
         XCTAssertTrue(config.reactions.values.allSatisfy { $0.say == nil && $0.sound == nil })
         XCTAssertTrue(config.characters.isEmpty)
     }

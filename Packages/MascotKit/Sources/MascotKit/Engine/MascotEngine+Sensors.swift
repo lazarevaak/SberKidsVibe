@@ -2,9 +2,6 @@
 //  MascotEngine+Sensors.swift
 //  MascotKit
 //
-//  Датчик движения (наклон, тряска, переворот), зарядка и вибрация.
-//  Разрешения не нужны. Датчик работает, только пока экран с маскотом виден.
-//
 
 import UIKit
 import CoreMotion
@@ -20,14 +17,11 @@ extension MascotEngine {
         }
     }
 
-    /// Вызывает слой маскота: экран закрыт другим или приложение свёрнуто — датчики стоят.
     func setSensorsActive(_ active: Bool) {
         sensorsAllowed = active
         updateMotion()
     }
 
-    /// Пока маскот на экране, датчик нужен 30 раз в секунду (наклон, тряска);
-    /// пока его нет — 15 раз, только чтобы заметить тряску.
     func updateMotion() {
         guard sensorsStarted, motion.isDeviceMotionAvailable else { return }
         guard sensorsAllowed else {
@@ -49,7 +43,6 @@ extension MascotEngine {
     }
 }
 
-/// Генераторы вибрации создаются один раз и заранее «прогреваются» — без задержки на первом толчке.
 @MainActor
 final class Haptics {
     let light = UIImpactFeedbackGenerator(style: .light)

@@ -3,9 +3,9 @@
 //  VinesKit
 //
 //  Пасхалка: лианы свисают с верхнего края экрана, покачиваются и
-//  срываются резким смахом. Что именно висит (матрица 0/1, паутина с
+//  срываются резким смахом. Что именно висит (матрица 6/7, паутина с
 //  пауком, новогодняя гирлянда…) задаётся паком в конфиге на CDN —
-//  см. VinesConfig и cdn/vines.json. Адрес CDN — Vines.contentURL.
+//  см. VinesConfig. Адрес CDN — Vines.contentURL.
 //
 //  Лианы не перехватывают касания — весь UI под ними продолжает работать.
 //
@@ -20,6 +20,26 @@
 
 import SwiftUI
 import UIKit
+import os
+
+private struct VineOcclusionPreferenceKey: PreferenceKey {
+    static var defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// Mark a UI element that should remain readable beneath hanging vines.
+public extension View {
+    func vineOcclusion() -> some View {
+        background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: VineOcclusionPreferenceKey.self,
+                                       value: [proxy.frame(in: .global)])
+            }
+        }
+    }
+}
 
 /// Настройка лиан.
 public enum Vines {
@@ -35,13 +55,13 @@ extension View {
     /// - Parameters:
     ///   - isActive: показывать ли пасхалку на этом экране.
     ///   - configFile: имя конфига в папке `Vines.contentURL`.
-    ///   - bundledFallback: имя JSON в бандле приложения — если нет ни сети, ни кэша.
+    ///   - refreshID: измените значение, чтобы заново показать лианы без ожидания cooldown.
     ///   - onCleared: вызывается, когда смахнули все лианы.
     public func hangingVines(isActive: Bool = true,
                              configFile: String = "vines.json",
-                             bundledFallback: String = "vines_default",
+                             refreshID: Int = 0,
                              onCleared: (() -> Void)? = nil) -> some View {
-        modifier(HangingVinesModifier(isActive: isActive, configFile: configFile, bundledFallback: bundledFallback, onCleared: onCleared))
+        modifier(HangingVinesModifier(isActive: isActive, configFile: configFile, refreshID: refreshID, onCleared: onCleared))
     }
 }
 
@@ -50,13 +70,22 @@ extension View {
 private struct HangingVinesModifier: ViewModifier {
     let isActive: Bool
     let configFile: String
-    let bundledFallback: String
+    let refreshID: Int
     let onCleared: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var field: VineField?
     @State private var isOnScreen = false
+    @State private var lastRefreshID = 0
+    @State private var uiOcclusions: [CGRect] = []
+
+    private struct LoadRequest: Equatable {
+        let scenePhase: ScenePhase
+        let refreshID: Int
+        let isActive: Bool
+        let reduceMotion: Bool
+    }
 
     private var isShown: Bool { isActive && !reduceMotion && field != nil }
 
@@ -64,10 +93,12 @@ private struct HangingVinesModifier: ViewModifier {
         content
             .overlay {
                 if isShown, let field {
-                    VinesCanvas(field: field, isRunning: isOnScreen && scenePhase == .active) {
+                    VinesCanvas(field: field, isRunning: isOnScreen && scenePhase == .active) { [weak field] in
+                        guard let field, self.field === field else { return }
                         withAnimation { self.field = nil }
                         onCleared?()
                     }
+                    .id(ObjectIdentifier(field))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
                     .transition(.opacity)
@@ -79,36 +110,57 @@ private struct HangingVinesModifier: ViewModifier {
                 field?.handleTouch(atGlobal: location, time: time)
             } onEnd: {
                 field?.endTouch()
+            } onWindow: { window in
+                field?.window = window
             })
-            // Конфиг и картинки грузятся в фоне уже после первого кадра —
-            // запуск и главный экран не ждут сеть.
-            .task(id: scenePhase) {
-                guard scenePhase == .active, isActive, !reduceMotion, field == nil else { return }
-                guard let prepared = await VinesConfigStore.shared.packToShow(configFile: configFile, bundledFallback: bundledFallback) else { return }
-                field = VineField(prepared: prepared)
+            .onPreferenceChange(VineOcclusionPreferenceKey.self) { rects in
+                uiOcclusions = rects
+                field?.uiOcclusions = rects
+            }
+            // Конфиг и ассеты загружаются из CDN/его кэша в фоне.
+            .task(id: LoadRequest(scenePhase: scenePhase, refreshID: refreshID, isActive: isActive, reduceMotion: reduceMotion)) {
+                guard scenePhase == .active, isActive, !reduceMotion else { return }
+                let isRefresh = refreshID != lastRefreshID
+                if isRefresh, let currentField = field {
+                    // Pull-to-refresh возвращает текущие лианы сразу; сеть и повторная
+                    // загрузка ассетов здесь не нужны.
+                    lastRefreshID = refreshID
+                    await currentField.refresh()
+                    return
+                }
+                guard field == nil || isRefresh else { return }
+                let prepared = await VinesConfigStore.shared.packToShow(configFile: configFile, ignoreCooldown: isRefresh)
+                guard !Task.isCancelled else { return }
+                lastRefreshID = refreshID
+                if let prepared {
+                    let lite = DevicePerformance.isLite
+                    let atlas = await Task.detached(priority: .utility) {
+                        VineSpriteAtlas.prepare(pack: prepared.pack, images: prepared.images, lite: lite)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    let nextField = VineField(prepared: prepared, atlas: atlas)
+                    nextField.uiOcclusions = uiOcclusions
+                    field = nextField
+                } else { field = nil }
             }
     }
 }
 
-// MARK: - Canvas
+// MARK: - Renderer
 
-private struct VinesCanvas: View {
+private struct VinesCanvas: UIViewRepresentable {
     let field: VineField
     let isRunning: Bool
     let onCleared: () -> Void
 
-    var body: some View {
-        // Анимация стоит, когда приложение свёрнуто или экран закрыт другим.
-        TimelineView(.animation(minimumInterval: DevicePerformance.minimumFrameInterval, paused: !isRunning)) { timeline in
-            Canvas { context, size in
-                let time = timeline.date.timeIntervalSinceReferenceDate
-                field.step(to: time, size: size)
-                field.draw(in: &context, time: time)
-            }
-        }
-        .onGlobalFrameChange { field.canvasFrame = $0 }
-        .onAppear { field.onCleared = onCleared }
+    func makeUIView(context: Context) -> VineLayerView { VineLayerView(field: field) }
+
+    func updateUIView(_ view: VineLayerView, context: Context) {
+        field.onCleared = onCleared
+        view.setRunning(isRunning)
     }
+
+    static func dismantleUIView(_ view: VineLayerView, coordinator: ()) { view.setRunning(false) }
 }
 
 // MARK: - Gesture
@@ -120,6 +172,7 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
     let isEnabled: Bool
     let onChange: (CGPoint, TimeInterval) -> Void
     let onEnd: () -> Void
+    let onWindow: (UIWindow?) -> Void
 
     func makeUIView(context: Context) -> CatcherView {
         let view = CatcherView()
@@ -131,6 +184,8 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
         view.recognizer.isEnabled = isEnabled
         view.onChange = onChange
         view.onEnd = onEnd
+        view.onWindow = onWindow
+        onWindow(view.window)
     }
 
     static func dismantleUIView(_ view: CatcherView, coordinator: ()) {
@@ -141,6 +196,7 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
         let recognizer = UIPanGestureRecognizer()
         var onChange: ((CGPoint, TimeInterval) -> Void)?
         var onEnd: (() -> Void)?
+        var onWindow: ((UIWindow?) -> Void)?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -157,6 +213,7 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
             super.didMoveToWindow()
             detach()
             window?.addGestureRecognizer(recognizer)
+            onWindow?(window)
         }
 
         func detach() {
@@ -179,316 +236,135 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
 
 // MARK: - Physics
 
-private struct Vine {
-    var points: [CGPoint]
-    var previous: [CGPoint]
-    var anchor: CGPoint
-    var segment: CGFloat
-    var glyphSize: CGFloat
-    var opacity: Double
-    var phase: Double
-    var seed: Int
-    var isAttached = true
-    var life: Double = 1
-}
-
-/// Верёвочная физика (Verlet) для всех лиан. Ссылочный тип, чтобы его можно было
-/// мутировать прямо из Canvas и из распознавателя жестов без лишних перерисовок.
-private final class VineField {
+/// UI-фасад: отображает неизменяемые снимки фоновой симуляции.
+@MainActor
+final class VineField {
+    weak var window: UIWindow?
     var canvasFrame: CGRect = .zero
+    var uiOcclusions: [CGRect] = []
     var onCleared: (() -> Void)?
-
-    private let pack: VinePack
-    private let images: [String: UIImage]
-    private let bodyColors: [Color]
-    private let headColor: Color
-    private let threadColor: Color?
-    private let glowColor: Color?
-    /// Эмодзи заранее отрисованы в картинки: Canvas не умеет цветные глифы в resolve(Text).
-    private var emojiImages: [String: UIImage] = [:]
-
-    private var vines: [Vine] = []
-    private var size: CGSize = .zero
-    private var lastTime: TimeInterval?
-    private var accumulator: TimeInterval = 0
-    private var simTime: TimeInterval = 0
-    private var lastTouch: (point: CGPoint, time: TimeInterval)?
-    private var didSpawn = false
-    private var didReportCleared = false
+    let atlas: VineSpriteAtlas
+    let threadColor: CGColor?
+    let threadWidth: CGFloat
+    let overlapOpacity: Float
+    private(set) var frame = VineFrame()
+    private(set) var revision = 0
+    private let simulation: VineSimulation
+    private let motion = VineMotion()
+    private let chainSound: VineChainSound
     private let haptic = UIImpactFeedbackGenerator(style: .light)
-    private let lite = DevicePerformance.isLite
+    private var pendingTouches: [VineTouch] = []
+    private var request: Task<Void, Never>?
+    private var inFlight = false
+    private var running = false
+    private var generation = 0
+    private var reportedCleared = false
+    private let diagnosticsEnabled = ProcessInfo.processInfo.arguments.contains("-LaunchDiagnostics")
+    private let diagnosticsLog = Logger(subsystem: "AlfaKids.Performance", category: "Vines")
+    private var diagnosticsStart: TimeInterval?
+    private var diagnosticsFinished = false
+    private var roundTrips: [Double] = []
+    private var readyGaps: [Double] = []
+    private var lastReady: TimeInterval?
+    private var skippedTicks = 0
 
-    private let gravity: CGFloat = 1500
-    private let fixedStep: TimeInterval = 1.0 / 120
-    private let damping: CGFloat = 0.985
-    private let touchRadius: CGFloat = 26
-
-    init(prepared: PreparedVinePack) {
-        pack = prepared.pack
-        images = prepared.images
-        let colors = pack.colors.compactMap { Color(hexString: $0) }
-        bodyColors = colors.isEmpty ? [.green] : colors
-        headColor = Color(hexString: pack.headColor) ?? bodyColors[0]
-        threadColor = Color(hexString: pack.thread)
-        glowColor = Color(hexString: pack.glow)
-        for glyph in pack.glyphs + pack.head where !glyph.unicodeScalars.allSatisfy(\.isASCII) {
-            emojiImages[glyph] = Self.render(emoji: glyph)
-        }
+    init(prepared: PreparedVinePack, atlas: VineSpriteAtlas) {
+        let pack = prepared.pack
+        self.atlas = atlas
+        threadColor = VineSpriteAtlas.color(pack.thread)?.cgColor
+        threadWidth = pack.threadWidth * pack.scale
+        overlapOpacity = Float(pack.overlapOpacity)
+        chainSound = VineChainSound(settings: pack.sound, clips: prepared.sounds)
+        simulation = VineSimulation(pack: pack, lite: DevicePerformance.isLite,
+                                    bodyImageCount: pack.images.compactMap { prepared.images[$0] }.count,
+                                    headImageCount: pack.headImages.compactMap { prepared.images[$0] }.count,
+                                    colorCount: max(1, pack.colors.compactMap { VineSpriteAtlas.color($0) }.count))
     }
 
-    private static func render(emoji: String) -> UIImage {
-        let font = UIFont.systemFont(ofSize: 48)
-        let text = emoji as NSString
-        let size = text.size(withAttributes: [.font: font])
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            text.draw(at: .zero, withAttributes: [.font: font])
-        }
-    }
-
-    // MARK: Setup
-
-    private func spawn(in size: CGSize) {
-        didSpawn = true
-        var rng = SystemRandomNumberGenerator()
-        let fullCount = max(1, pack.count ?? max(6, Int(size.width / 34)))
-        // На слабых устройствах лиан меньше.
-        let count = lite ? max(1, Int((Double(fullCount) * 0.6).rounded())) : fullCount
-        let spacing = size.width / CGFloat(count)
-        let glyphRange = range(pack.glyphSize, fallback: 10...17)
-        let lengthRange = range(pack.length, fallback: 0.1...0.34)
-
-        vines = (0..<count).map { index in
-            let glyph = CGFloat.random(in: glyphRange, using: &rng)
-            let segment = glyph * 1.05
-            let length = size.height * CGFloat.random(in: lengthRange, using: &rng)
-            let links = max(5, Int(length / segment))
-            let x = spacing * (CGFloat(index) + 0.5) + .random(in: -spacing * 0.3...spacing * 0.3, using: &rng)
-            let anchor = CGPoint(x: x, y: -2)
-            // Стартуем свёрнутыми над краем — при открытии лианы «падают» и раскачиваются.
-            let points = (0..<links).map { i in
-                CGPoint(x: x + .random(in: -6...6, using: &rng), y: anchor.y - CGFloat(i) * segment * 0.35)
-            }
-            return Vine(points: points,
-                        previous: points,
-                        anchor: anchor,
-                        segment: segment,
-                        glyphSize: glyph,
-                        opacity: pack.flicker ? .random(in: 0.55...1, using: &rng) : 1,
-                        phase: .random(in: 0...(2 * .pi), using: &rng),
-                        seed: .random(in: 0...10_000, using: &rng))
-        }
-    }
-
-    private func range(_ values: [Double], fallback: ClosedRange<CGFloat>) -> ClosedRange<CGFloat> {
-        guard values.count == 2 else { return fallback }
-        let low = CGFloat(min(values[0], values[1])), high = CGFloat(max(values[0], values[1]))
-        return low...high
-    }
-
-    // MARK: Simulation
-
-    func step(to time: TimeInterval, size: CGSize) {
-        if !didSpawn && size.width > 0 { spawn(in: size) }
-        self.size = size
-
-        let delta = min(time - (lastTime ?? time), 1.0 / 20)
-        lastTime = time
-        accumulator += delta
-        while accumulator >= fixedStep {
-            integrate(fixedStep)
-            accumulator -= fixedStep
-            simTime += fixedStep
-        }
-
-        vines.removeAll { !$0.isAttached && ($0.life <= 0 || $0.points.allSatisfy { $0.y > size.height + 40 }) }
-        if didSpawn && vines.isEmpty && !didReportCleared {
-            didReportCleared = true
-            DispatchQueue.main.async { self.onCleared?() }
-        }
-    }
-
-    private func integrate(_ dt: TimeInterval) {
-        let dt = CGFloat(dt)
-        let sway = CGFloat(pack.sway)
-        for v in vines.indices {
-            var vine = vines[v]
-            let n = vine.points.count
-            let start = vine.isAttached ? 1 : 0
-
-            for i in start..<n {
-                let p = vine.points[i]
-                let velocity = CGVector(dx: (p.x - vine.previous[i].x) * damping,
-                                        dy: (p.y - vine.previous[i].y) * damping)
-                let depth = CGFloat(i) / CGFloat(n)
-                let wind = CGFloat(sin(simTime * 1.3 + vine.phase + Double(i) * 0.18)) * 120 * depth * sway
-                vine.previous[i] = p
-                vine.points[i] = CGPoint(x: p.x + velocity.dx + wind * dt * dt,
-                                         y: p.y + velocity.dy + gravity * dt * dt)
-            }
-            if vine.isAttached { vine.points[0] = vine.anchor }
-
-            for _ in 0..<(lite ? 5 : 8) {
-                for i in 0..<(n - 1) {
-                    let a = vine.points[i], b = vine.points[i + 1]
-                    let dx = b.x - a.x, dy = b.y - a.y
-                    let distance = max(sqrt(dx * dx + dy * dy), 0.0001)
-                    let diff = (distance - vine.segment) / distance
-                    if vine.isAttached && i == 0 {
-                        vine.points[1] = CGPoint(x: b.x - dx * diff, y: b.y - dy * diff)
-                    } else {
-                        vine.points[i] = CGPoint(x: a.x + dx * diff * 0.5, y: a.y + dy * diff * 0.5)
-                        vine.points[i + 1] = CGPoint(x: b.x - dx * diff * 0.5, y: b.y - dy * diff * 0.5)
-                    }
-                }
-            }
-
-            if !vine.isAttached { vine.life -= Double(dt) / 1.4 }
-            vines[v] = vine
-        }
-    }
-
-    // MARK: Touch
-
-    func handleTouch(atGlobal global: CGPoint, time: TimeInterval) {
-        let point = CGPoint(x: global.x - canvasFrame.minX, y: global.y - canvasFrame.minY)
-        defer { lastTouch = (point, time) }
-        guard let last = lastTouch, time > last.time else { return }
-
-        let move = CGVector(dx: point.x - last.point.x, dy: point.y - last.point.y)
-        let speed = hypot(move.dx, move.dy) / CGFloat(time - last.time)
-
-        for v in vines.indices where vines[v].isAttached {
-            var hit = false
-            for i in 1..<vines[v].points.count {
-                let d = distance(from: vines[v].points[i], toSegment: last.point, point)
-                guard d < touchRadius else { continue }
-                hit = true
-                let falloff = 1 - d / touchRadius
-                vines[v].points[i].x += move.dx * 0.6 * falloff
-                vines[v].points[i].y += move.dy * 0.6 * falloff
-            }
-            if hit && speed > CGFloat(pack.tearSpeed) {
-                vines[v].isAttached = false
-                // Отрываем с запасом скорости по направлению смаха.
-                for i in vines[v].points.indices {
-                    vines[v].previous[i].x -= move.dx * 0.35
-                    vines[v].previous[i].y -= move.dy * 0.35 + 4
-                }
-                if pack.haptic { haptic.impactOccurred(intensity: 0.7) }
-            }
-        }
-    }
-
-    func endTouch() {
-        lastTouch = nil
-    }
-
-    private func distance(from p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
-        let ab = CGVector(dx: b.x - a.x, dy: b.y - a.y)
-        let lengthSquared = ab.dx * ab.dx + ab.dy * ab.dy
-        guard lengthSquared > 0 else { return hypot(p.x - a.x, p.y - a.y) }
-        let t = max(0, min(1, ((p.x - a.x) * ab.dx + (p.y - a.y) * ab.dy) / lengthSquared))
-        return hypot(p.x - (a.x + ab.dx * t), p.y - (a.y + ab.dy * t))
-    }
-
-    // MARK: Drawing
-
-    private enum Item {
-        case text(String, Color)
-        case image(UIImage)
-    }
-
-    /// Звено №i лианы: картинка или символ, с мерцанием или без.
-    private func bodyItem(of vine: Vine, at i: Int, time: TimeInterval) -> Item? {
-        let index: Int
-        if pack.flicker {
-            let tick = Int(time * (2 + Double((vine.seed + i) % 5))) + vine.seed * 31 + i * 7
-            index = abs(tick &* 2_654_435_761)
+    func setRunning(_ active: Bool) {
+        guard running != active else { return }
+        running = active
+        generation += 1
+        let audioGeneration = generation
+        Task { [chainSound] in await chainSound.setRunning(active, generation: audioGeneration) }
+        if active {
+            motion.start()
         } else {
-            index = vine.seed + i
-        }
-        let loaded = pack.images.compactMap { images[$0] }
-        if !loaded.isEmpty { return .image(loaded[index % loaded.count]) }
-        guard !pack.glyphs.isEmpty else { return nil }
-        let color = bodyColors[(pack.flicker ? vine.seed : vine.seed + i) % bodyColors.count]
-        return item(for: pack.glyphs[index % pack.glyphs.count], color: color)
-    }
-
-    /// Кончик лианы: отдельная картинка/символ из пака, иначе обычное звено, но ярче.
-    private func headItem(of vine: Vine, time: TimeInterval) -> Item? {
-        let loaded = pack.headImages.compactMap { images[$0] }
-        if !loaded.isEmpty { return .image(loaded[vine.seed % loaded.count]) }
-        if !pack.head.isEmpty { return item(for: pack.head[vine.seed % pack.head.count], color: headColor) }
-        switch bodyItem(of: vine, at: vine.points.count - 1, time: time) {
-        case .text(let glyph, _): return .text(glyph, headColor)
-        case let other: return other
+            motion.stop()
+            request?.cancel()
+            request = nil
+            inFlight = false
+            pendingTouches.removeAll(keepingCapacity: true)
         }
     }
 
-    private func item(for glyph: String, color: Color) -> Item {
-        emojiImages[glyph].map(Item.image) ?? .text(glyph, color)
+    func refresh() async {
+        let wasRunning = running
+        running = false
+        generation += 1
+        request?.cancel()
+        request = nil
+        inFlight = false
+        pendingTouches.removeAll(keepingCapacity: true)
+        reportedCleared = false
+        await simulation.restart(generation: generation)
+        running = wasRunning
+        let audioGeneration = generation
+        Task { [chainSound] in await chainSound.setRunning(wasRunning, generation: audioGeneration) }
     }
 
-    func draw(in context: inout GraphicsContext, time: TimeInterval) {
-        var cache: [String: GraphicsContext.ResolvedText] = [:]
-        func resolved(_ glyph: String, _ color: Color, size: CGFloat, head: Bool) -> GraphicsContext.ResolvedText {
-            let key = "\(glyph)|\(color.description)|\(Int(size))|\(head)"
-            if let hit = cache[key] { return hit }
-            let text = context.resolve(
-                Text(glyph)
-                    .font(.system(size: CGFloat(Int(size)), weight: head ? .heavy : .bold,
-                                  design: pack.monospaced ? .monospaced : .rounded))
-                    .foregroundColor(color)
-            )
-            cache[key] = text
-            return text
+    /// Один запрос в работе. Пропущенные display ticks не становятся очередью задач.
+    func step(to time: TimeInterval, size: CGSize) {
+        guard running, size.width > 0, size.height > 0 else { return }
+        guard !inFlight else {
+            if diagnosticsEnabled, !diagnosticsFinished { skippedTicks += 1 }
+            return
         }
-
-        context.drawLayer { layer in
-            // Свечение — размытие тени, самая дорогая операция для старой видеокарты; на слабых устройствах без него.
-            if let glowColor, !lite { layer.addFilter(.shadow(color: glowColor, radius: 3)) }
-
-            for vine in vines {
-                let n = vine.points.count
-                let life = max(vine.life, 0)
-
-                if let threadColor {
-                    var path = Path()
-                    path.addLines(vine.points)
-                    var g = layer
-                    g.opacity = life
-                    g.stroke(path, with: .color(threadColor), style: StrokeStyle(lineWidth: pack.threadWidth, lineCap: .round, lineJoin: .round))
-                }
-
-                for i in 0..<n {
-                    let isHead = i == n - 1
-                    let onStep = pack.itemEvery > 0 && i % pack.itemEvery == 0 && i > 0
-                    guard isHead || onStep else { continue }
-                    guard let item = isHead ? headItem(of: vine, time: time) : bodyItem(of: vine, at: i, time: time) else { continue }
-
-                    let p = vine.points[i]
-                    let neighbor = vine.points[isHead ? i - 1 : i + 1]
-                    var angle = atan2(neighbor.y - p.y, neighbor.x - p.x) - .pi / 2
-                    if isHead { angle += .pi }
-                    let size = isHead ? CGFloat(pack.headSize ?? Double(vine.glyphSize)) : vine.glyphSize
-                    // Матрица гаснет к верхнему краю, остальные паки рисуются ровно.
-                    let fade = pack.flicker ? 0.35 + 0.65 * Double(i) / Double(max(n - 1, 1)) : 1
-
-                    var g = layer
-                    g.opacity = vine.opacity * fade * life
-                    g.translateBy(x: p.x, y: p.y)
-                    g.rotate(by: .radians(Double(angle)))
-                    switch item {
-                    case .text(let glyph, let color):
-                        g.draw(resolved(glyph, color, size: size, head: isHead), at: .zero, anchor: .center)
-                    case .image(let image):
-                        let aspect = image.size.height / max(image.size.width, 1)
-                        let rect = CGRect(x: -size / 2, y: -size * aspect / 2, width: size, height: size * aspect)
-                        // Картинка «подвешена» за верх, чтобы шарики и пауки висели на нити, а не на центре.
-                        g.draw(Image(uiImage: image), in: rect.offsetBy(dx: 0, dy: size * aspect / 2 - size * 0.15))
-                    }
-                }
+        let requestedAt = CACurrentMediaTime()
+        if diagnosticsEnabled, diagnosticsStart == nil { diagnosticsStart = requestedAt }
+        inFlight = true
+        let generation = generation
+        let sample = motion.sample(in: window)
+        let touches = pendingTouches
+        pendingTouches.removeAll(keepingCapacity: true)
+        let simulation = simulation
+        request = Task(priority: .userInitiated) { [weak self] in
+            let next = await simulation.advance(time: time, size: size, motion: sample,
+                                                touches: touches, generation: generation)
+            guard let self, !Task.isCancelled, self.generation == generation, self.running else { return }
+            self.inFlight = false
+            self.frame = next
+            self.revision &+= 1
+            self.recordFrame(requestedAt: requestedAt)
+            if let audio = next.audio {
+                Task { [chainSound = self.chainSound] in await chainSound.apply(audio, generation: generation) }
+            }
+            if next.didTear { self.haptic.impactOccurred(intensity: 0.7) }
+            if next.cleared && !self.reportedCleared {
+                self.reportedCleared = true
+                self.onCleared?()
             }
         }
     }
+
+    private func recordFrame(requestedAt: TimeInterval) {
+        guard diagnosticsEnabled, !diagnosticsFinished, let start = diagnosticsStart else { return }
+        let now = CACurrentMediaTime()
+        roundTrips.append((now - requestedAt) * 1000)
+        if let lastReady { readyGaps.append((now - lastReady) * 1000) }
+        else { diagnosticsLog.notice("first simulation ready ms=\((now - start) * 1000, privacy: .public)") }
+        lastReady = now
+        guard now - start >= 12 else { return }
+        diagnosticsFinished = true
+        let trips = roundTrips.sorted(), gaps = readyGaps.sorted()
+        guard !gaps.isEmpty else { return }
+        diagnosticsLog.notice("simulation frames=\(trips.count) skipped_ticks=\(self.skippedTicks) roundtrip_p95_ms=\(trips[Int(Double(trips.count - 1) * 0.95)], privacy: .public) ready_gap_p95_ms=\(gaps[Int(Double(gaps.count - 1) * 0.95)], privacy: .public) ready_gap_max_ms=\(gaps.last!, privacy: .public)")
+    }
+
+    func handleTouch(atGlobal point: CGPoint, time: TimeInterval) {
+        if pendingTouches.count >= 32 { pendingTouches.removeFirst() }
+        pendingTouches.append(.move(global: point, canvas: canvasFrame, time: time))
+    }
+
+    func endTouch() { pendingTouches.append(.end) }
 }

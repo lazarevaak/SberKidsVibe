@@ -5,6 +5,7 @@
 
 import SwiftUI
 import MascotKit
+import VinesKit
 
 // MARK: - Palette
 
@@ -45,78 +46,121 @@ struct Transaction: Identifiable {
 // MARK: - Home
 
 struct HomeView: View {
+    var onRefresh: () -> Void = {}
+    var onFirstScroll: () -> Void = {}
+
     @State private var selectedTab: Tab = .home
     @State private var cardPage = 0
 
-    private let actions = [
+    private static let actions = [
         QuickAction(title: "QR", icon: "action_qr"),
         QuickAction(title: "Скинуть\nденег", icon: "action_transfer"),
         QuickAction(title: "Пополнить\nмобилку", icon: "action_phone"),
     ]
 
-    private let transactions = [
+    private static let transactions = [
         Transaction(icon: "history_home", title: "Товары для дома", subtitle: "Маркетплейсы", amount: "-2 292 ₽", cashback: "+28"),
         Transaction(icon: "history_kuper", title: "Купер", subtitle: "Супермаркет", amount: "-4 686 ₽", cashback: nil),
         Transaction(icon: "history_transfer", title: "Мария Валерьевна Р.", subtitle: "Клиенту Сбера", amount: "-500 ₽", cashback: nil),
     ]
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            background
+        GeometryReader { geometry in
+            let landscape = geometry.size.width > geometry.size.height && geometry.size.width >= 620
+            let inset: CGFloat = landscape ? 24 : 20
+            let contentWidth = min(max(geometry.size.width - inset * 2, 0), 1120)
+            let columnWidth = (contentWidth - 24) / 2
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Image("avatar")
-                        .resizable()
-                        .frame(width: 64, height: 64)
-                        .clipShape(Circle())
-                        .mascotHome()
-                        .mascotTrigger("avatar", .longPress(), .toggle)
-                        .padding(.horizontal, 8)
-
-                    cardSection
-                        .padding(.top, -24)
-
-                    pageIndicator
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 2)
-
-                    quickActions
-                        .padding(.top, 32)
-
-                    promoBanner
-                        .mascotSurface("promo")
-                        .padding(.top, 44)
-
-                    Text("История")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(Color.textPrimary)
-                        .padding(.top, 28)
-
-                    historyCard
-                        .mascotSurface("history")
-                        .padding(.top, 20)
-
-                    Button {} label: {
-                        Text("Посмотреть историю")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Color.textPrimary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 62)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            ZStack {
+                ScrollView(showsIndicators: false) {
+                    Group {
+                        if #available(iOS 16.0, *) {
+                            HomeColumnsLayout(horizontal: landscape) {
+                                accountColumn(width: landscape ? columnWidth : contentWidth, compact: landscape)
+                                detailsColumn(compact: landscape)
+                            }
+                        } else {
+                            LegacyHomeColumns(
+                                horizontal: landscape, width: contentWidth,
+                                first: accountColumn(width: landscape ? columnWidth : contentWidth, compact: landscape),
+                                second: detailsColumn(compact: landscape)
+                            )
+                        }
                     }
-                    .mascotSurface("historyButton")
-                    .padding(.top, 28)
+                    .frame(width: contentWidth)
+                    .padding(.top, landscape ? 8 : 12)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 120)
+                .refreshable { onRefresh() }
+                .modifier(FirstScrollAction(action: onFirstScroll))
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                TabBar(selected: $selectedTab, compact: landscape)
+                    .vineOcclusion()
+                    .mascotSurface("tabbar", occludesBelow: true)
+                    .frame(maxWidth: landscape ? 640 : 520)
+                    .padding(.horizontal, inset)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                    .frame(maxWidth: .infinity)
+            }
+            .background { background }
+        }
+    }
 
-            TabBar(selected: $selectedTab)
-                .mascotSurface("tabbar", occludesBelow: true)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 4)
+    private var avatar: some View {
+        Image("avatar")
+            .resizable()
+            .frame(width: 64, height: 64)
+            .clipShape(Circle())
+            .vineOcclusion()
+            .mascotHome()
+            .mascotTrigger("avatar", .longPress(), .toggle)
+            .padding(.horizontal, 8)
+    }
+
+    private func accountColumn(width: CGFloat, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            avatar
+            cardSection(width: width, compact: compact)
+                .padding(.top, compact ? -12 : -24)
+            pageIndicator
+                .frame(maxWidth: .infinity)
+                .padding(.top, 2)
+            quickActions(width: width, compact: compact)
+                .padding(.top, compact ? 20 : 32)
+        }
+    }
+
+    private func detailsColumn(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            promoBanner(compact: compact)
+                .vineOcclusion()
+                .mascotSurface("promo")
+                .padding(.top, compact ? 14 : 0)
+
+            Text("История")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(Color.textPrimary)
+                .padding(.top, compact ? 24 : 28)
+
+            historyCard(compact: compact)
+                .vineOcclusion()
+                .mascotSurface("history")
+                .padding(.top, compact ? 16 : 20)
+
+            Button {} label: {
+                Text("Посмотреть историю")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: compact ? 52 : 62)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            }
+            .vineOcclusion()
+            .mascotSurface("historyButton")
+            .padding(.top, compact ? 16 : 28)
         }
     }
 
@@ -137,19 +181,25 @@ struct HomeView: View {
 
     // MARK: Card + balance
 
-    private var cardSection: some View {
-        ZStack(alignment: .bottom) {
+    private func cardSection(width: CGFloat, compact: Bool) -> some View {
+        let scale = min(1, width / 350)
+        return ZStack(alignment: .bottom) {
             TabView(selection: $cardPage) {
                 ForEach(0..<3, id: \.self) { index in
-                    cardStack.tag(index)
+                    cardStack
+                        .frame(width: 350, height: 210)
+                        .scaleEffect(scale)
+                        .offset(y: compact ? -4 : -20)
+                        .frame(width: width, height: compact ? 200 : 240)
+                        .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 240)
+            .frame(height: compact ? 200 : 240)
 
-            balanceBar
+            balanceBar(compact: compact)
         }
-        .frame(height: 280)
+        .frame(height: compact ? 240 : 280)
     }
 
     private var cardStack: some View {
@@ -171,16 +221,16 @@ struct HomeView: View {
                 .shadow(color: .black.opacity(0.12), radius: 14, y: 8)
                 .rotationEffect(.degrees(-5))
         }
-        .frame(maxWidth: .infinity)
-        .offset(y: -20)
     }
 
-    private var balanceBar: some View {
+    private func balanceBar(compact: Bool) -> some View {
         HStack {
             (Text("7 932").foregroundColor(Color.textPrimary)
              + Text(",04 ₽").foregroundColor(Color.textSecondary.opacity(0.7)))
-                .font(.system(size: 22, weight: .bold))
-                .padding(.leading, 20)
+                .font(.system(size: compact ? 20 : 22, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(.leading, compact ? 12 : 20)
 
             Spacer()
 
@@ -192,12 +242,13 @@ struct HomeView: View {
                     .resizable()
                     .frame(width: 20, height: 20)
             }
-            .frame(width: 112, height: 60)
+            .frame(width: compact ? 88 : 112, height: compact ? 48 : 60)
             .background(Color.limeLight, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .padding(8)
         .background(.white, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .shadow(color: .black.opacity(0.04), radius: 10, y: 4)
+        .vineOcclusion()
         .mascotSurface("balance")
         // Демо: тап по балансу имитирует пополнение — маскот радуется.
         .mascotTrigger("balance", .tap(), .event(.topUp))
@@ -216,70 +267,173 @@ struct HomeView: View {
 
     // MARK: Quick actions
 
-    private var quickActions: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+    @ViewBuilder
+    private func quickActions(width: CGFloat, compact: Bool) -> some View {
+        if compact {
             HStack(spacing: 10) {
-                ForEach(actions) { action in
-                    QuickActionTile(action: action, compact: action.title == "QR")
-                        .mascotSurface("action-\(action.title)")
-                        // Пасхалка: тройной тап по плитке — событие "secret", заданное только в конфиге.
-                        .mascotTrigger("tile-\(action.title)", .tap(count: 3), .react("secret"))
+                ForEach(Self.actions) { action in
+                    actionTile(action, width: (width - 20) / 3, dense: true)
                 }
             }
-            .padding(.horizontal, 20)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Self.actions) { action in
+                        actionTile(action)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .padding(.horizontal, -20)
         }
-        .padding(.horizontal, -20)
+    }
+
+    private func actionTile(_ action: QuickAction, width: CGFloat? = nil, dense: Bool = false) -> some View {
+        QuickActionTile(action: action, compact: action.title == "QR", width: width, dense: dense)
+            .vineOcclusion()
+            .mascotSurface("action-\(action.title)")
+            .mascotTrigger("tile-\(action.title)", .tap(count: 3), .react("secret"))
     }
 
     // MARK: Promo
 
-    private var promoBanner: some View {
+    private func promoBanner(compact: Bool) -> some View {
         ZStack(alignment: .leading) {
             LinearGradient(colors: [Color(hex: 0x8E7BEF), Color(hex: 0x6FA4E8), Color(hex: 0x8CCBD4)],
                            startPoint: .leading, endPoint: .trailing)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Узнай свои сильные\nстороны")
-                    .font(.system(size: 19, weight: .bold))
+                    .font(.system(size: compact ? 17 : 19, weight: .bold))
                     .foregroundStyle(.white)
                 Text("с тестом по профориентации")
-                    .font(.system(size: 13))
+                    .font(.system(size: compact ? 12 : 13))
                     .foregroundStyle(.white.opacity(0.9))
             }
-            .padding(.leading, 26)
+            .padding(.leading, compact ? 18 : 26)
+            .padding(.trailing, compact ? 84 : 72)
         }
         .frame(height: 114)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .topTrailing) {
             Image("ufo")
                 .resizable()
-                .frame(width: 120, height: 94)
+                .frame(width: compact ? 94 : 120, height: compact ? 76 : 94)
                 .offset(x: 6, y: -14)
         }
     }
 
     // MARK: History
 
-    private var historyCard: some View {
-        VStack(spacing: 22) {
-            ForEach(transactions) { TransactionRow(transaction: $0) }
+    private func historyCard(compact: Bool) -> some View {
+        VStack(spacing: compact ? 18 : 22) {
+            ForEach(Self.transactions) { TransactionRow(transaction: $0, compact: compact) }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 26)
+        .padding(.horizontal, compact ? 18 : 24)
+        .padding(.vertical, compact ? 20 : 26)
         .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .vineOcclusion()
+    }
+}
+
+/// Uses the scroll view's own phase on iOS 18+, avoiding an extra competing drag recognizer.
+private struct FirstScrollAction: ViewModifier {
+    let action: () -> Void
+    @State private var didTrigger = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollPhaseChange { oldPhase, newPhase in
+                guard !didTrigger, oldPhase == .interacting, newPhase != .interacting else { return }
+                didTrigger = true
+                action()
+            }
+        } else {
+            content.simultaneousGesture(
+                DragGesture(minimumDistance: 12).onEnded { value in
+                    guard !didTrigger,
+                          abs(value.translation.height) > abs(value.translation.width) else { return }
+                    didTrigger = true
+                    action()
+                }
+            )
+        }
     }
 }
 
 // MARK: - Components
 
+/// Меняется только размещение колонок; карусель карты не пересоздаётся при повороте.
+@available(iOS 16.0, *)
+private struct HomeColumnsLayout: Layout {
+    let horizontal: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = max(0, proposal.width ?? 350)
+        let columnWidth = horizontal ? max(0, (width - 24) / 2) : width
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)) }
+        let height = horizontal ? (sizes.map(\.height).max() ?? 0) : sizes.reduce(0) { $0 + $1.height } + 44
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = horizontal ? max(0, (bounds.width - 24) / 2) : bounds.width
+        let childProposal = ProposedViewSize(width: width, height: nil)
+        var y = bounds.minY
+        for index in subviews.indices {
+            let x = bounds.minX + (horizontal ? CGFloat(index) * (width + 24) : 0)
+            subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: childProposal)
+            if !horizontal { y += subviews[index].sizeThatFits(childProposal).height + 44 }
+        }
+    }
+}
+
+/// Та же стабильная структура для iOS 15, где ещё нет протокола Layout.
+private struct LegacyHomeColumns<First: View, Second: View>: View {
+    let horizontal: Bool
+    let width: CGFloat
+    let first: First
+    let second: Second
+    @State private var firstHeight: CGFloat = 0
+    @State private var secondHeight: CGFloat = 0
+
+    var body: some View {
+        let columnWidth = horizontal ? max(0, (width - 24) / 2) : width
+        ZStack(alignment: .topLeading) {
+            measured(first, width: columnWidth, height: $firstHeight)
+            measured(second, width: columnWidth, height: $secondHeight)
+                .offset(x: horizontal ? columnWidth + 24 : 0,
+                        y: horizontal ? 0 : firstHeight + 44)
+        }
+        .frame(width: width,
+               height: horizontal ? max(firstHeight, secondHeight) : firstHeight + secondHeight + 44,
+               alignment: .topLeading)
+    }
+
+    private func measured<V: View>(_ view: V, width: CGFloat, height: Binding<CGFloat>) -> some View {
+        view.frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { height.wrappedValue = proxy.size.height }
+                        .onChange(of: proxy.size.height) { height.wrappedValue = $0 }
+                }
+            }
+    }
+}
+
 struct QuickActionTile: View {
     let action: QuickAction
     var compact = false
+    var width: CGFloat?
+    var dense = false
 
     var body: some View {
         VStack(alignment: compact ? .center : .leading, spacing: 0) {
             Text(action.title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: dense ? 14 : 16, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(2)
@@ -288,52 +442,72 @@ struct QuickActionTile: View {
             Spacer(minLength: 12)
             Image(action.icon)
                 .resizable()
-                .frame(width: 52, height: 52)
+                .frame(width: dense ? 40 : 52, height: dense ? 40 : 52)
                 .frame(maxWidth: .infinity, alignment: compact ? .center : .trailing)
         }
-        .padding(compact ? 14 : 18)
-        .frame(width: compact ? 80 : 158, height: 134)
+        .padding(dense ? 12 : (compact ? 14 : 18))
+        .frame(width: width ?? (compact ? 80 : 158), height: dense ? 112 : 134)
         .background(.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
 
 struct TransactionRow: View {
     let transaction: Transaction
+    var compact = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 18) {
+        HStack(alignment: compact ? .top : .center, spacing: compact ? 12 : 18) {
             Image(transaction.icon)
                 .resizable()
-                .frame(width: 52, height: 52)
+                .frame(width: compact ? 42 : 52, height: compact ? 42 : 52)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: compact ? 6 : 4) {
                 Text(transaction.title)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.textPrimary)
+                    .lineLimit(2)
                 Text(transaction.subtitle)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.textSecondary)
-            }
-            .padding(.top, 6)
-
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(transaction.amount)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(Color.textPrimary)
-                if let cashback = transaction.cashback {
-                    HStack(spacing: 3) {
-                        Text(cashback)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.brandGreen)
-                        Image("coin_green")
-                            .resizable()
-                            .frame(width: 15, height: 15)
+                if compact {
+                    HStack(spacing: 12) {
+                        amount
+                        cashback
                     }
                 }
             }
-            .padding(.top, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, compact ? 0 : 6)
+
+            if !compact {
+                VStack(alignment: .trailing, spacing: 4) {
+                    amount
+                    cashback
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var amount: some View {
+        Text(transaction.amount)
+            .font(.system(size: 17, weight: .bold))
+            .foregroundStyle(Color.textPrimary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private var cashback: some View {
+        if let cashback = transaction.cashback {
+            HStack(spacing: 3) {
+                Text(cashback)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.brandGreen)
+                Image("coin_green")
+                    .resizable()
+                    .frame(width: 15, height: 15)
+            }
         }
     }
 }
@@ -366,6 +540,7 @@ enum Tab: CaseIterable {
 
 struct TabBar: View {
     @Binding var selected: Tab
+    var compact = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -376,7 +551,7 @@ struct TabBar: View {
                     if tab == .paw {
                         Image(tab.icon)
                             .resizable()
-                            .frame(width: 54, height: 54)
+                            .frame(width: compact ? 42 : 54, height: compact ? 42 : 54)
                             .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
                     } else {
                         VStack(spacing: 4) {
@@ -400,7 +575,7 @@ struct TabBar: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: 76)
+        .frame(height: compact ? 58 : 76)
         .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
     }
@@ -418,6 +593,18 @@ private struct ActiveSparks: View {
     }
 }
 
-#Preview {
-    HomeView()
+struct HomeView_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            HomeView()
+                .previewLayout(.fixed(width: 390, height: 844))
+                .previewDisplayName("Портрет")
+            HomeView()
+                .previewLayout(.fixed(width: 844, height: 390))
+                .previewDisplayName("Горизонтально")
+            HomeView()
+                .previewLayout(.fixed(width: 667, height: 375))
+                .previewDisplayName("Компактный горизонтальный")
+        }
+    }
 }

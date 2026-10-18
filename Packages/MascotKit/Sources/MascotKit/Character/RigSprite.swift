@@ -88,10 +88,8 @@ struct RigSprite: View {
         // Своя анимация двигает персонажа целиком: вращение, подпрыгивания, покачивание.
         .rotationEffect(.degrees(wholeBody.angle))
         .offset(x: wholeBody.dx, y: wholeBody.dy)
-        // Все детали — одним растровым слоем; отступ — чтобы не обрезались эффекты и размах лап.
-        .padding(24)
-        .drawingGroup()
-        .padding(-24)
+        // Не растрируем весь спрайт: первый drawingGroup создаёт Metal pipeline
+        // синхронно и может подвесить главный поток при первом появлении маскота.
         .scaleEffect(x: s.facing * (1 + s.squash), y: 1 - s.squash, anchor: footAnchor)
         .rotationEffect(.degrees(s.spin))
         .scaleEffect(s.scale, anchor: footAnchor)

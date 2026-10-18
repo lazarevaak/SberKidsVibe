@@ -13,6 +13,7 @@ let package = Package(
             name: "VinesKit",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        .testTarget(name: "VinesKitTests", dependencies: ["VinesKit"]),
     ],
     swiftLanguageModes: [.v6]
 )

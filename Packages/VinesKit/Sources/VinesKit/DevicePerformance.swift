@@ -17,6 +17,6 @@ enum DevicePerformance {
             || ProcessInfo.processInfo.isLowPowerModeEnabled
     }
 
-    /// Минимальный интервал кадров для TimelineView: 30 fps в облегчённом режиме, иначе — сколько даст экран.
-    static var minimumFrameInterval: Double? { isLite ? 1.0 / 30 : nil }
+    /// 60 fps достаточно для плавности; на слабых устройствах — 30 fps.
+    static var minimumFrameInterval: Double? { isLite ? 1.0 / 30 : 1.0 / 60 }
 }

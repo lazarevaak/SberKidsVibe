@@ -10,9 +10,15 @@ import MascotKit
 import VinesKit
 
 struct ContentView: View {
+    @State private var vinesRefreshID = 0
+    @State private var hasUserScrolled = false
+
     var body: some View {
-        HomeView()
-            .hangingVines()
+        HomeView(
+            onRefresh: { vinesRefreshID += 1 },
+            onFirstScroll: { hasUserScrolled = true }
+        )
+            .hangingVines(isActive: hasUserScrolled, refreshID: vinesRefreshID)
             .mascot()
     }
 }

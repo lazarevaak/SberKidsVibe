@@ -82,6 +82,7 @@ actor VineSimulation {
         self.bodyImageCount = bodyImageCount
         self.headImageCount = headImageCount
         self.colorCount = max(1, colorCount)
+        
         physics = VinePhysics(lite: lite)
         audioPolicy = VineAudioPolicy(settings: pack.sound)
     }
@@ -89,6 +90,7 @@ actor VineSimulation {
     func advance(time: TimeInterval, size: CGSize, motion: VineMotionSample?, touches: [VineTouch], generation: Int) -> VineFrame {
         dispatchPrecondition(condition: .notOnQueue(.main))
         guard !Task.isCancelled else { return VineFrame() }
+        
         if self.generation != generation {
             self.generation = generation
             lastTime = nil
@@ -100,12 +102,18 @@ actor VineSimulation {
             targetMotionForce = .zero
             audioPolicy.reset()
         }
+        
         didTear = false
         audioEvent = nil
+        
         for touch in touches {
             switch touch {
-            case .move(let point, let canvas, let time): handleTouch(atGlobal: point, canvasFrame: canvas, time: time)
-            case .end: endTouch()
+            case .move(let point, let canvas, let time):
+                handleTouch(atGlobal: point, canvasFrame: canvas, time: time)
+                
+            case .end:
+                endTouch()
+                
             }
         }
         step(to: time, size: size, motion: motion)
@@ -151,20 +159,23 @@ actor VineSimulation {
             let length = size.height * CGFloat.random(in: lengthRange, using: &rng)
             let links = min(lite ? 20 : 28, max(5, Int(length / segment)))
             let jitterBound: CGFloat
+            
             if let spacingFraction = pack.spacing {
                 let requestedGap = size.width * CGFloat(spacingFraction)
+                
                 jitterBound = max(0, min(spacing * 0.15, (spacing - requestedGap) * 0.5))
             } else {
                 jitterBound = spacing * 0.3
             }
-            let x = spacing * (CGFloat(index) + 0.5)
-                + CGFloat.random(in: -jitterBound...jitterBound, using: &rng)
+            
+            let x = spacing * (CGFloat(index) + 0.5) + CGFloat.random(in: -jitterBound...jitterBound, using: &rng)
             let anchor = CGPoint(x: x, y: -2)
             // Стартуем свёрнутыми над краем — при открытии лианы «падают» и раскачиваются.
             let points = (0..<links).map { i in
                 CGPoint(x: x + CGFloat.random(in: -6...6, using: &rng),
                         y: anchor.y - CGFloat(i) * segment * 0.35)
             }
+            
             return Vine(points: points,
                         previous: points,
                         anchor: anchor,
@@ -174,6 +185,7 @@ actor VineSimulation {
                         phase: .random(in: 0...(2 * .pi), using: &rng),
                         seed: .random(in: 0...10_000, using: &rng) * 32 + index)
         }
+        
         physics.prepare(&vines)
     }
 
@@ -230,22 +242,28 @@ actor VineSimulation {
 
     private func step(to time: TimeInterval, size: CGSize, motion: VineMotionSample?) {
         if !didSpawn && size.width > 0 { spawn(in: size) }
+        
         if self.size.width > 0,
            abs(self.size.width - size.width) > 0.5 || abs(self.size.height - size.height) > 0.5 {
             resizingUntil = time + 0.2
         }
+        
         if self.size.width > 0, self.size.width != size.width {
             for v in vines.indices {
                 let x = vines[v].anchor.x * size.width / self.size.width
                 let shift = x - vines[v].anchor.x
+                
                 vines[v].anchor.x = x
+                
                 for i in vines[v].points.indices {
                     vines[v].points[i].x += shift
                     vines[v].previous[i].x += shift
                 }
             }
         }
+        
         self.size = size
+        
         if let motion { updateMotion(motion) }
         if let lastMotionSampleAt, ProcessInfo.processInfo.systemUptime - lastMotionSampleAt > 0.15 {
             targetMotionForce = .zero
@@ -257,6 +275,7 @@ actor VineSimulation {
         accumulator += delta
         let started = ProcessInfo.processInfo.systemUptime
         let budget = lite ? 0.0015 : 0.0025
+        
         while accumulator >= fixedStep && !Task.isCancelled {
             integrate(fixedStep, resizing: time < resizingUntil || time < reducedWorkUntil)
             accumulator -= fixedStep
@@ -273,11 +292,13 @@ actor VineSimulation {
                 break
             }
         }
+        
         if ProcessInfo.processInfo.systemUptime - started < budget {
             consecutiveOverBudgetFrames = 0
         }
 
         vines.removeAll { !$0.isAttached && ($0.life <= 0 || $0.points.allSatisfy { $0.y > size.height + 40 }) }
+        
         if didSpawn && vines.isEmpty { didReportCleared = true }
     }
 
@@ -306,20 +327,25 @@ actor VineSimulation {
 
         for v in vines.indices where vines[v].isAttached {
             var hit = false
+            
             for i in 1..<vines[v].points.count {
                 let d = distance(from: vines[v].points[i], toSegment: last.point, point)
                 guard d < touchRadius else { continue }
                 hit = true
                 let falloff = 1 - d / touchRadius
+                
                 vines[v].points[i].x += move.dx * 0.6 * falloff
                 vines[v].points[i].y += move.dy * 0.6 * falloff
             }
+            
             if hit && speed > CGFloat(pack.tearSpeed) {
                 vines[v].isAttached = false
+                
                 for i in vines[v].points.indices {
                     vines[v].previous[i].x -= move.dx * 0.35
                     vines[v].previous[i].y -= move.dy * 0.35 + 4
                 }
+                
                 if pack.haptic { didTear = true }
             }
         }
@@ -343,14 +369,21 @@ actor VineSimulation {
             if headImageCount > 0 { return .headImage(vine.seed % headImageCount) }
             if !pack.head.isEmpty { return .glyph(pack.head[vine.seed % pack.head.count], color: 0, head: true) }
         }
+        
         let value: Int
+        
         if pack.flicker {
             let tick = Int(time * (2 + Double((vine.seed + index) % 5))) + vine.seed * 31 + index * 7
             value = Int(UInt(bitPattern: tick &* 2_654_435_761) & UInt(Int.max))
-        } else { value = vine.seed + index }
+        } else {
+            value = vine.seed + index
+        }
+        
         if bodyImageCount > 0 { return .bodyImage(value % bodyImageCount) }
+        
         guard !pack.glyphs.isEmpty else { return nil }
         let color = (pack.flicker ? vine.seed : vine.seed + index) % colorCount
+        
         return .glyph(pack.glyphs[value % pack.glyphs.count], color: color, head: head)
     }
 
@@ -358,8 +391,10 @@ actor VineSimulation {
         let strands = vines.map { vine in
             let n = vine.points.count
             let life = max(vine.life, 0)
+            
             var nodes: [VineRenderNode] = []
             nodes.reserveCapacity(n)
+            
             for i in 1..<n {
                 let head = i == n - 1
                 guard head || (pack.itemEvery > 0 && i % pack.itemEvery == 0),
@@ -374,15 +409,20 @@ actor VineSimulation {
                 nodes.append(VineRenderNode(point: p, transform: transform,
                                             opacity: vine.opacity * fade * life, visual: visual))
             }
+            
             let path: VineThreadPath?
+            
             if pack.thread != nil {
                 let builder = CGMutablePath()
                 builder.addLines(between: vine.points)
                 path = builder.copy().map { VineThreadPath(value: $0) }
-            } else { path = nil }
+            } else {
+                path = nil
+            }
+            
             return VineRenderStrand(id: vine.seed, points: vine.points, threadPath: path, opacity: life, nodes: nodes)
         }
-        return VineFrame(strands: strands, size: size,
-                         cleared: didReportCleared, didTear: didTear, audio: audioEvent)
+        
+        return VineFrame(strands: strands, size: size, cleared: didReportCleared, didTear: didTear, audio: audioEvent)
     }
 }

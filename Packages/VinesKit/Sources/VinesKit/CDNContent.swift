@@ -43,10 +43,12 @@ nonisolated enum CDNContent {
             try? url.absoluteString.write(to: source, atomically: true, encoding: .utf8)
             return (value, url)
         }
+        
         if let data = try? Data(contentsOf: cached), let value = decode(type, data, file) {
             let base = (try? String(contentsOf: source, encoding: .utf8)).flatMap(URL.init(string:))
             return (value, base)
         }
+        
         return nil
     }
 
@@ -79,6 +81,7 @@ nonisolated enum CDNContent {
             return try JSONDecoder().decode(type, from: data)
         } catch {
             print("CDN: не удалось разобрать \(file) — \(error)")
+            
             return nil
         }
     }

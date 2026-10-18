@@ -1,9 +1,12 @@
+//
+//  VineMotion.swift
+//  VinesKit
+//
+
 import CoreMotion
 import UIKit
 
-/// Датчики читаются только во время показа лиан. В симуляторе остаётся обычная гравитация.
 final class VineMotion {
-
     private let manager = CMMotionManager()
     private var lastTimestamp: TimeInterval?
 
@@ -34,8 +37,6 @@ final class VineMotion {
         )
     }
 
-    /// Core Motion: X вправо, Y вверх в портретной системе устройства.
-    /// fixedCoordinateSpace учитывает поворот интерфейса именно нашего окна.
     private static func screenVector(x: Double, y: Double, in window: UIWindow?) -> CGVector {
         let point = CGPoint(x: x, y: -y)
         guard let window else { return CGVector(dx: point.x, dy: point.y) }

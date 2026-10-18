@@ -2,21 +2,6 @@
 //  HangingVines.swift
 //  VinesKit
 //
-//  Пасхалка: лианы свисают с верхнего края экрана, покачиваются и
-//  срываются резким смахом. Что именно висит (матрица 6/7, паутина с
-//  пауком, новогодняя гирлянда…) задаётся паком в конфиге на CDN —
-//  см. VinesConfig. Адрес CDN — Vines.contentURL.
-//
-//  Лианы не перехватывают касания — весь UI под ними продолжает работать.
-//
-//  Использование:
-//      import VinesKit
-//
-//      Vines.contentURL = URL(string: "https://cdn.example.com/fun/")   // один раз при старте
-//
-//      HomeView()
-//          .hangingVines()
-//
 
 import SwiftUI
 import UIKit
@@ -29,7 +14,6 @@ private struct VineOcclusionPreferenceKey: PreferenceKey {
     }
 }
 
-/// Mark a UI element that should remain readable beneath hanging vines.
 public extension View {
     func vineOcclusion() -> some View {
         background {
@@ -41,9 +25,7 @@ public extension View {
     }
 }
 
-/// Настройка лиан.
 public enum Vines {
-    /// Папка на CDN с vines.json и картинками. Задаётся один раз при старте приложения.
     public static var contentURL: URL? {
         get { CDNContent.baseURL }
         set { CDNContent.baseURL = newValue }
@@ -51,12 +33,6 @@ public enum Vines {
 }
 
 extension View {
-    /// Навешивает на экран свисающие сверху лианы из конфига.
-    /// - Parameters:
-    ///   - isActive: показывать ли пасхалку на этом экране.
-    ///   - configFile: имя конфига в папке `Vines.contentURL`.
-    ///   - refreshID: измените значение, чтобы заново показать лианы без ожидания cooldown.
-    ///   - onCleared: вызывается, когда смахнули все лианы.
     public func hangingVines(isActive: Bool = true,
                              configFile: String = "vines.json",
                              refreshID: Int = 0,
@@ -64,8 +40,6 @@ extension View {
         modifier(HangingVinesModifier(isActive: isActive, configFile: configFile, refreshID: refreshID, onCleared: onCleared))
     }
 }
-
-// MARK: - Modifier
 
 private struct HangingVinesModifier: ViewModifier {
     let isActive: Bool
@@ -117,13 +91,10 @@ private struct HangingVinesModifier: ViewModifier {
                 uiOcclusions = rects
                 field?.uiOcclusions = rects
             }
-            // Конфиг и ассеты загружаются из CDN/его кэша в фоне.
             .task(id: LoadRequest(scenePhase: scenePhase, refreshID: refreshID, isActive: isActive, reduceMotion: reduceMotion)) {
                 guard scenePhase == .active, isActive, !reduceMotion else { return }
                 let isRefresh = refreshID != lastRefreshID
                 if isRefresh, let currentField = field {
-                    // Pull-to-refresh возвращает текущие лианы сразу; сеть и повторная
-                    // загрузка ассетов здесь не нужны.
                     lastRefreshID = refreshID
                     await currentField.refresh()
                     return
@@ -146,8 +117,6 @@ private struct HangingVinesModifier: ViewModifier {
     }
 }
 
-// MARK: - Renderer
-
 private struct VinesCanvas: UIViewRepresentable {
     let field: VineField
     let isRunning: Bool
@@ -163,11 +132,6 @@ private struct VinesCanvas: UIViewRepresentable {
     static func dismantleUIView(_ view: VineLayerView, coordinator: ()) { view.setRunning(false) }
 }
 
-// MARK: - Gesture
-
-/// Пан на всём окне, который распознаётся одновременно со скроллом и не отменяет касания под собой.
-/// Сама вьюха невидима и касаний не принимает — она только вешает распознаватель на окно.
-/// Координаты — глобальные (окна).
 private struct WindowSwipeCatcher: UIViewRepresentable {
     let isEnabled: Bool
     let onChange: (CGPoint, TimeInterval) -> Void
@@ -234,9 +198,6 @@ private struct WindowSwipeCatcher: UIViewRepresentable {
     }
 }
 
-// MARK: - Physics
-
-/// UI-фасад: отображает неизменяемые снимки фоновой симуляции.
 @MainActor
 final class VineField {
     weak var window: UIWindow?
@@ -313,7 +274,6 @@ final class VineField {
         Task { [chainSound] in await chainSound.setRunning(wasRunning, generation: audioGeneration) }
     }
 
-    /// Один запрос в работе. Пропущенные display ticks не становятся очередью задач.
     func step(to time: TimeInterval, size: CGSize) {
         guard running, size.width > 0, size.height > 0 else { return }
         guard !inFlight else {

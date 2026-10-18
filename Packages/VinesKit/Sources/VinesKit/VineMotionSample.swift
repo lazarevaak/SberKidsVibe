@@ -1,3 +1,8 @@
+//
+//  VineMotionSample.swift
+//  VinesKit
+//
+
 import Foundation
 import CoreGraphics
 

@@ -13,7 +13,6 @@ extension Color {
                   blue: Double(hex & 0xFF) / 255)
     }
 
-    /// "#RRGGBB" или "#RRGGBBAA" из конфига.
     init?(hexString: String?) {
         guard var hex = hexString?.trimmingCharacters(in: .whitespaces) else { return nil }
         if hex.hasPrefix("#") { hex.removeFirst() }

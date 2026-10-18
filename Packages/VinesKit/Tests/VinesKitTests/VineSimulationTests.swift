@@ -1,3 +1,8 @@
+//
+//  VineSimulationTests.swift
+//  VinesKitTests
+//
+
 import XCTest
 @testable import VinesKit
 
@@ -9,7 +14,6 @@ final class VineSimulationTests: XCTestCase {
         return VineSimulation(pack: pack, lite: false, bodyImageCount: 0, headImageCount: 0, colorCount: 1)
     }
 
-    /// Production code asserts that advance() never executes on the main queue.
     @MainActor
     func testSnapshotsAreImmutableWhileBackgroundSimulationAdvances() async throws {
         let simulation = try simulation()

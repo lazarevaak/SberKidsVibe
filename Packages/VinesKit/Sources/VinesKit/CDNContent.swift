@@ -2,9 +2,6 @@
 //  CDNContent.swift
 //  VinesKit
 //
-//  Загрузка контента лиан только с CDN или из кэша ранее загруженного CDN.
-//  Картинки кэшируются на диск навсегда по адресу.
-//
 
 import SwiftUI
 import UIKit
@@ -12,9 +9,6 @@ import UIKit
 nonisolated enum CDNContent {
     @MainActor private static var configuredBaseURL: URL?
 
-    /// Папка с контентом на CDN. Приложение задаёт её через публичное contentURL.
-    /// Для демо можно переопределить аргументом запуска `-CDNBaseURL https://…/cdn/`
-    /// (или file:///…/cdn/ в симуляторе).
     @MainActor static var baseURL: URL? {
         get {
             if let override = UserDefaults.standard.string(forKey: "CDNBaseURL") { return URL(string: override) }
@@ -30,7 +24,6 @@ nonisolated enum CDNContent {
         return dir
     }
 
-    /// Загружает и декодирует конфиг. Возвращает его и адрес, от которого считать относительные пути картинок.
     @concurrent
     static func load<T: Decodable & Sendable>(_ type: T.Type, file: String) async -> (T, URL?)? {
         let baseURL = await baseURL
@@ -43,16 +36,15 @@ nonisolated enum CDNContent {
             try? url.absoluteString.write(to: source, atomically: true, encoding: .utf8)
             return (value, url)
         }
-        
+
         if let data = try? Data(contentsOf: cached), let value = decode(type, data, file) {
             let base = (try? String(contentsOf: source, encoding: .utf8)).flatMap(URL.init(string:))
             return (value, base)
         }
-        
+
         return nil
     }
 
-    /// Абсолютный URL или путь относительно CDN-конфига.
     @concurrent
     static func image(_ ref: String, relativeTo base: URL?) async -> UIImage? {
         guard let url = URL(string: ref, relativeTo: base)?.absoluteURL else { return nil }
@@ -64,7 +56,6 @@ nonisolated enum CDNContent {
         return image
     }
 
-    /// Звук: путь от конфига или полный URL. Файлы кэшируются после загрузки.
     @concurrent
     static func data(_ ref: String, relativeTo base: URL?) async -> Data? {
         guard !ref.hasPrefix("bundle:") else { return nil }
@@ -81,7 +72,7 @@ nonisolated enum CDNContent {
             return try JSONDecoder().decode(type, from: data)
         } catch {
             print("CDN: не удалось разобрать \(file) — \(error)")
-            
+
             return nil
         }
     }
@@ -100,7 +91,6 @@ nonisolated enum CDNContent {
     }
 }
 
-/// Сезон в формате "MM-dd", повторяется каждый год; может переходить через Новый год.
 nonisolated enum Season {
     static func isActive(from: String?, to: String?, on date: Date = .now) -> Bool {
         guard let start = monthDay(from), let end = monthDay(to) else { return from == nil && to == nil }
@@ -116,7 +106,6 @@ nonisolated enum Season {
 }
 
 extension KeyedDecodingContainer {
-    /// decodeIfPresent со значением по умолчанию — чтобы в JSON можно было писать только нужные поля.
     nonisolated func value<T: Decodable>(_ key: Key, default value: T) throws -> T {
         try decodeIfPresent(T.self, forKey: key) ?? value
     }

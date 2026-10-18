@@ -2,14 +2,10 @@
 //  VinesConfigStore.swift
 //  VinesKit
 //
-//  Решает, показывать ли лианы, и готовит выбранный пак: конфиг берётся
-//  только из CDN или его кэша, картинки скачиваются до показа.
-//
 
 import SwiftUI
 import UIKit
 
-/// Пак, готовый к показу: конфиг + уже загруженные картинки.
 nonisolated struct PreparedVinePack: Sendable {
     let pack: VinePack
     let images: [String: UIImage]
@@ -37,7 +33,6 @@ final class VinesConfigStore {
         async let loadedImages = loadImages(pack.imageRefs, relativeTo: baseURL)
         async let loadedSounds = loadSounds(pack.sound, relativeTo: baseURL)
         let images = await loadedImages
-        // Пак на одних картинках без единой загруженной картинки показывать нечем.
         let needsImages = !pack.images.isEmpty && pack.glyphs.isEmpty
         if needsImages && !pack.images.contains(where: { images[$0] != nil }) { return nil }
         let sounds = await loadedSounds

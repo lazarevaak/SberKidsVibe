@@ -1,3 +1,8 @@
+//
+//  VinePhysics.swift
+//  VinesKit
+//
+
 import CoreGraphics
 import Foundation
 
@@ -22,7 +27,6 @@ nonisolated struct VineNodeProfile: Sendable {
     let response: CGFloat
 }
 
-/// Независимо качающиеся подвесы с инерцией и упругим натяжением.
 nonisolated final class VinePhysics {
     let lite: Bool
     private var predictedTips: [CGVector] = []
@@ -31,7 +35,6 @@ nonisolated final class VinePhysics {
         self.lite = lite
     }
 
-    /// Предварительно вычисляет профили реакции звеньев.
     func prepare(_ vines: inout [Vine]) {
         predictedTips.reserveCapacity(vines.count)
         for vineIndex in vines.indices {
@@ -52,14 +55,11 @@ nonisolated final class VinePhysics {
             prepare(&vines)
         }
         predictedTips.removeAll(keepingCapacity: true)
-        // The outer array is uniquely borrowed once for all integration passes.
-        // No array is resized while these pointers are borrowed.
         vines.withUnsafeMutableBufferPointer { buffer in
             for v in buffer.indices {
                 predictedTips.append(advance(&buffer[v], dt: dt, gravity: gravity,
                                              motionForce: motionForce, time: time, sway: sway, shake: shake))
             }
-            // Each strand solves only its own segment lengths; nearby strands never interact.
             let iterations = lite || resizing ? 3 : 4
             for _ in 0..<iterations {
                 for v in buffer.indices { constrain(&buffer[v]) }
@@ -82,7 +82,6 @@ nonisolated final class VinePhysics {
             vine.points.withUnsafeMutableBufferPointer { (points: inout UnsafeMutableBufferPointer<CGPoint>) -> Void in
                 for i in first..<points.count {
                     let p = points[i]
-                    // Медленнее теряем энергию, но ограничиваем скорость при повторных сильных рывках.
                     var dx = (p.x - previous[i].x) * 0.997
                     var dy = (p.y - previous[i].y) * 0.997
                     let speedSquared = dx * dx + dy * dy
@@ -94,7 +93,6 @@ nonisolated final class VinePhysics {
                     let profile = profiles[i]
                     let phase: CGFloat = windSin * profile.windCos + windCos * profile.windSin
                     let wind: CGFloat = phase * windScale * profile.depth
-                    // Разная фаза и масса украшений не дают всем нитям двигаться синхронно.
                     let response = profile.response
                     previous[i] = p
                     let forceX: CGFloat = gravity.dx + motionForce.dx * response + wind * gravity.dy / 1500
@@ -114,8 +112,6 @@ nonisolated final class VinePhysics {
         let last = vine.points.count - 1
         let attached = vine.isAttached
         let segment = vine.segment
-        // Один доступ к буферу вместо повторной проверки уникальности массива
-        // при каждой записи координаты. Буфер не выходит за пределы этого вызова.
         vine.points.withUnsafeMutableBufferPointer { points in
             for i in 0..<last {
                 let a = points[i], b = points[i + 1]
@@ -140,8 +136,6 @@ nonisolated final class VinePhysics {
         let nx = dx / reach, ny = dy / reach
         let outward = predictedVelocity.dx * nx + predictedVelocity.dy * ny
         guard outward > 0.8 else { return }
-        // Резкий рывок натягивает всю нить и возвращает кончик обратно к подвесу.
-        // Сохраняем касательную скорость при возврате кончика от предела длины.
         let current = CGVector(dx: tip.x - vine.previous[i].x, dy: tip.y - vine.previous[i].y)
         let radial = current.dx * nx + current.dy * ny
         let vx = current.dx - nx * (radial + outward * 0.4)

@@ -1,6 +1,10 @@
+//
+//  VineChainSound.swift
+//  VinesKit
+//
+
 import AVFoundation
 
-/// Короткое бряцание свободных звеньев. Пул ограничивает наложение звуков.
 actor VineChainSound {
     private var players: [Int: AVAudioPlayer] = [:]
     private let settings: VineSoundConfig
